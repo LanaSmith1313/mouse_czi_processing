@@ -124,6 +124,7 @@ process stageFilesRSync {
 
 process copyResultsToImageFolder {
     tag "${key}_${combo.collect { k, v -> "${k}${v}" }.join('_')}" // Optional: for logging/identification
+    maxForks 1  // serialize haas<->cluster transfers to avoid bandwidth/disk contention
 
     input:
     tuple val(key), val(output_path), val(combo), path(output_files), val(original_path)
@@ -148,11 +149,37 @@ process copyResultsToImageFolder {
 
     """
     echo "Create the target directory via SSH: ${targetInfo.sshHost}:${targetDir}"
-    ssh ${targetInfo.sshHost} "mkdir -p ${targetDir}"
+    # The destination is a CIFS/SMB share mounted with soft,retrans=1 -- any
+    # transient network blip surfaces as EIO/EHOSTDOWN. Retry mkdir and each
+    # rsync with backoff so a single blip doesn't fail the whole task.
+    for attempt in 1 2 3; do
+        if ssh ${targetInfo.sshHost} "mkdir -p ${targetDir}"; then
+            break
+        fi
+        if [ \$attempt -eq 3 ]; then
+            echo "ERROR: mkdir failed after 3 attempts"
+            exit 1
+        fi
+        echo "mkdir attempt \$attempt failed; retrying in \$((attempt * 2))s..."
+        sleep \$((attempt * 2))
+    done
 
     # Copy each file individually with SMB-friendly flags to remote server
     for file in ${output_files}; do
-        rsync -rltvL --progress --inplace --no-perms --no-owner --no-group --no-times --modify-window=1 "\$file" "${targetInfo.sshHost}:${targetDir}/"
+        success=0
+        for attempt in 1 2 3 4 5; do
+            if rsync -rltvL --progress --inplace --no-perms --no-owner --no-group --no-times --modify-window=1 "\$file" "${targetInfo.sshHost}:${targetDir}/"; then
+                success=1
+                break
+            fi
+            backoff=\$((2 ** attempt))
+            echo "rsync of \$file failed on attempt \$attempt; retrying in \${backoff}s..."
+            sleep \$backoff
+        done
+        if [ \$success -ne 1 ]; then
+            echo "ERROR: rsync of \$file failed after 5 attempts"
+            exit 1
+        fi
     done
 
     echo "Successfully copied results to: ${targetInfo.sshHost}:${targetDir}"
@@ -161,6 +188,7 @@ process copyResultsToImageFolder {
 
 process publishFusedChannelsToSource {
     tag "publish fused channels for ${base_name}"
+    maxForks 1  // serialize haas<->cluster transfers to avoid bandwidth/disk contention
 
     input:
     tuple val(base_name), path(channel_files), val(output_path)
@@ -192,6 +220,7 @@ process publishFusedChannelsToSource {
 
 process stageFilesRSyncSSH {
     tag "stageRSyncSSH_${ssh_path.split('/')[-1]}"
+    maxForks 1  // serialize haas<->cluster transfers to avoid bandwidth/disk contention
 
     // Disable Nextflow's automatic staging
     stageInMode 'copy'

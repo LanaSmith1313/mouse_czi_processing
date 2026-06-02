@@ -289,6 +289,7 @@ process getVoxelSizes {
 
 process publishInitialXmlToSource {
     tag "publish xml for ${original_path.split('/')[-1]}"
+    maxForks 1  // serialize haas<->cluster transfers to avoid bandwidth/disk contention
 
     input:
     tuple path(xml_file), val(original_path), val(output_path)
@@ -331,6 +332,7 @@ process publishInitialXmlToSource {
 
 process publishStitchedXmlToSource {
     tag "publish xml for ${original_path.split('/')[-1]}"
+    maxForks 1  // serialize haas<->cluster transfers to avoid bandwidth/disk contention
 
     input:
     tuple path(xml_file), val(original_path), val(output_path)
