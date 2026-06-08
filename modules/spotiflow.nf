@@ -33,7 +33,7 @@ process spotiflowDetectKuma {
     KUMA='${params.kuma_host}'
     ZARR='${zarr_path}'
     OUTDIR='${out_dir}'
-    MODEL='${params.spotiflow_model}'
+    MODEL='${params.models_dir}/${params.spotiflow_model}'
     SBATCH='${params.spotiflow_sbatch}'
     SSH="ssh -n -o BatchMode=yes -o ConnectTimeout=30"
 
@@ -49,7 +49,7 @@ process spotiflowDetectKuma {
     sleep \$((RANDOM % 20))
     JOBID=""
     for attempt in 1 2 3 4 5 6 7 8; do
-        SUBMIT_OUT=\$(\$SSH "\$KUMA" "mkdir -p '\$OUTDIR' && sbatch --parsable '\$SBATCH' '\$ZARR' --verbose --out-dir '\$OUTDIR' -md '\$MODEL' --max-tile-size 256 256 256 --zarr-component 0 --zarr-component-lowres 3" 2>&1) || true
+        SUBMIT_OUT=\$(\$SSH "\$KUMA" "mkdir -p '\$OUTDIR' && SPOTIFLOW_ENV='${params.env_cache_dir}/spotiflow_12' sbatch --parsable '\$SBATCH' '\$ZARR' --verbose --out-dir '\$OUTDIR' -md '\$MODEL' --max-tile-size 256 256 256 --zarr-component 0 --zarr-component-lowres 3" 2>&1) || true
         JOBID=\$(printf '%s\\n' "\$SUBMIT_OUT" | grep -oE '^[0-9]+\$' | head -1 || true)
         if [ -n "\$JOBID" ]; then break; fi
         echo "submit attempt \$attempt failed; output:"; printf '%s\\n' "\$SUBMIT_OUT"

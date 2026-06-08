@@ -59,7 +59,7 @@ process convertTiffToOmeZarr {
 
     echo "Converting ${ch1_tiff} to OME-Zarr"
 
-    # Write zarr to local work directory (container can't write to /work/lsens)
+    # Write zarr to local work directory (container can't write to the shared output dir)
     python3 tiff_to_ome_zarr.py \\
         --input "${ch1_tiff}" \\
         --output "ch1.ome.zarr" \\

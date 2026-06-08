@@ -1,0 +1,34 @@
+#!/bin/bash
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --gpus 2
+#SBATCH --cpus-per-task=32
+#SBATCH --time=2-0
+#SBATCH --qos=normal
+#SBATCH --partition=h100
+#SBATCH --mem=180GB
+#SBATCH --output=/home/%u/logs/%j.out
+#SBATCH --error=/home/%u/logs/%j.err
+
+# Spotiflow prediction job (runs on the Kuma GPU cluster). Submitted by the
+# spotiflowDetectKuma Nextflow process over SSH, or manually with:
+#   sbatch bin/sbatch_spotiflow.batch <zarr> --out-dir <dir> -md <model> ...
+#
+# Activate the spotiflow env via micromamba's ABSOLUTE path + explicit root
+# prefix, so it works in non-interactive jobs (ssh submit) where .bashrc isn't
+# sourced and `micromamba` (a shell function) isn't defined. Paths default to a
+# standard per-user micromamba install but can be overridden via env vars.
+# Recreate the env with: micromamba create -f bin/spotiflow_env.yml
+MAMBA_EXE="${MAMBA_EXE:-$HOME/.local/bin/micromamba}"
+export MAMBA_ROOT_PREFIX="${MAMBA_ROOT_PREFIX:-$HOME/micromamba}"
+# Shared lab env on /work (path-based activation). The pipeline passes
+# SPOTIFLOW_ENV; this group-derived fallback is for manual sbatch runs.
+_grp=$(id -gn | sed 's/-unit$//')
+SPOTIFLOW_ENV="${SPOTIFLOW_ENV:-/work/$_grp/envs/spotiflow_12}"
+
+eval "$("$MAMBA_EXE" shell hook --shell bash)"
+micromamba activate "$SPOTIFLOW_ENV"
+
+echo "INFO: Running spotiflow predictions with arguments: $@"
+
+spotiflow-predict $@

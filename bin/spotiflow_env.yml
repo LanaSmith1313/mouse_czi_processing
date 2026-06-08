@@ -1,0 +1,20 @@
+# Conda/micromamba environment for the Spotiflow spot-detection step.
+# This env runs on the Kuma GPU cluster (h100) and is activated by
+# bin/sbatch_spotiflow.batch. It is NOT installed by the pipeline (it needs a
+# CUDA GPU node), so create it once on Kuma:
+#
+#   micromamba create -y -f bin/spotiflow_env.yml
+#
+# `spotiflow` pulls its own deps (torch, lightning, csbdeep, numpy, zarr,
+# tifffile, ...); on a CUDA host the matching nvidia-cu12 torch wheels install
+# automatically. Pinned to the versions validated with this pipeline.
+name: spotiflow_12
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - pip
+  - pip:
+      - spotiflow==0.6.2
+      - torch==2.9.1
+      - torchvision==0.24.1

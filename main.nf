@@ -502,13 +502,13 @@ workflow {
 //
 // Usage:
 //   nextflow run main.nf -entry omeZarrOnly -profile slurm \
-//       --brain_id MS190,MS191,MS192 --user_name Lana_Smith
+//       --brain_id MS190,MS191,MS192 --user_name First_Last
 workflow omeZarrOnly {
     if (!params.brain_id) {
         error "omeZarrOnly requires --brain_id (comma-separated, e.g. --brain_id MS190,MS191)"
     }
     if (!params.user_name) {
-        error "omeZarrOnly requires --user_name (e.g. --user_name Lana_Smith)"
+        error "omeZarrOnly requires --user_name (e.g. --user_name First_Last)"
     }
 
     def keys = params.brain_id.split(',').collect { it.trim() }

@@ -30,6 +30,7 @@ flowchart TB
     v35([publishFusedChannelsToSource])
     v36([convertTiffToOmeZarr])
     v36b([publishOmeZarr])
+    v60([spotiflowDetectKuma])
     v37([getVoxelSizes])
     v40([organizeChannelsForBrainreg])
     v48([brainregEnvInstall])
@@ -59,6 +60,7 @@ flowchart TB
     v34 --> v36
     v49 --> v36
     v36 --> v36b
+    v36b --> v60
     v34 --> v37
     v4 --> v37
     v34 --> v40
@@ -102,7 +104,43 @@ To additionally convert the fused ch1 channel to a multi-resolution OME-Zarr pyr
 nextflow run main.nf -resume -profile slurm --brain_id MS181 --user_name Lana_Smith --export_ome_zarr -with-trace
 ```
 
-This writes the OME-Zarr to the local cluster storage at `/work/lsens/<user_name>/<brain_id>/ch1.ome.zarr`. The export is disabled by default.
+This writes the OME-Zarr to the local cluster storage at `<ome_zarr_output_base>/<user_name>/<brain_id>/ch1.ome.zarr` (e.g. `/work/lsens/Lana_Smith/...`). The export is disabled by default.
+
+### Spotiflow Spot Detection (GPU, on the Kuma cluster)
+
+When OME-Zarr export is enabled, the pipeline runs [Spotiflow](https://github.com/weigertlab/spotiflow) spot detection on the ch1 OME-Zarr. Spotiflow needs GPUs, and SCITAS **Jed has none**, so this step runs on the **Kuma** GPU cluster (`h100`): the Jed-side Nextflow process submits an `sbatch` job to Kuma over SSH and waits for it to finish. Input and output both live on the shared `/work` filesystem, so no data is copied between clusters.
+
+It runs **automatically after `publishOmeZarr`** (whenever `--export_ome_zarr` is set) and is toggled with `--run_spotiflow` (default `true`):
+
+```bash
+# Spotiflow runs automatically with OME-Zarr export
+nextflow run main.nf -resume -profile slurm --brain_id MS181 --user_name Lana_Smith --export_ome_zarr -with-trace
+
+# Disable spotiflow for a run
+nextflow run main.nf -resume -profile slurm --brain_id MS181 --user_name Lana_Smith --export_ome_zarr --run_spotiflow false
+```
+
+Predictions are written to `<ome_zarr_output_base>/<user_name>/detection_results/<spotiflow_version>/<brain_id>/`.
+
+**Parameters** (in `nextflow.config`):
+
+| Param | Default | Purpose |
+|---|---|---|
+| `run_spotiflow` | `true` | Run spotiflow after the OME-Zarr is published |
+| `kuma_host` | `<user>@kuma.hpc.epfl.ch` | SSH target for the GPU cluster |
+| `spotiflow_version` | `spotiflow_lsfm_v6_scratch_preds` | Output subfolder (version label) |
+| `spotiflow_model` | `spotiflow_scratch_annotated_clean_...` | Model directory name under `models_dir` |
+| `spotiflow_sbatch` | `${projectDir}/bin/sbatch_spotiflow.batch` | The GPU batch script (2× h100, 180 GB) |
+
+**One-time setup on Kuma** (the env and model live on shared `/work`, not in git):
+
+1. **Passwordless SSH** from the Nextflow host (Jed) to `kuma_host` must be configured.
+2. **Create the env** on a GPU-capable node:
+   ```bash
+   micromamba create -y -p <env_cache_dir>/spotiflow_12 -f bin/spotiflow_env.yml
+   # e.g. /work/lsens/envs/spotiflow_12
+   ```
+3. **Place the model** under `<models_dir>/<spotiflow_model>` (e.g. `/work/lsens/models/spotiflow_scratch_annotated_clean_.../`).
 
 ### Dry Run (preview paths without processing)
 
