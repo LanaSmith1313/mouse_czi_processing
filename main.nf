@@ -364,17 +364,26 @@ workflow {
         ome_zarr_env = omeZarrEnvInstall()
         convertTiffToOmeZarr(ome_zarr_env, ch1_for_zarr)
         publishOmeZarr(convertTiffToOmeZarr.out.zarr_result)
+    }
 
-        // Spotiflow spot detection on Kuma (GPU), automatically after the
-        // OME-Zarr is published to the shared /work filesystem.
-        if (!params.skip_spotiflow) {
-            spotiflow_input = publishOmeZarr.out.published
-                .map { key, zarr ->
-                    def out_dir = "${params.ome_zarr_output_base}/${params.user_name}/detection_results/${params.spotiflow_version}/${key}"
-                    tuple(key, zarr, out_dir)
-                }
-            spotiflowDetectKuma(spotiflow_input)
+    // Spotiflow spot detection on Kuma (GPU). Normally runs on the OME-Zarr just
+    // published by the branch above. When OME-Zarr conversion is skipped
+    // (--skip_ome_zarr), it instead runs on the existing zarr already on /work —
+    // letting you re-run spotiflow without re-converting.
+    if (!params.skip_spotiflow && params.user_name) {
+        def spotiflow_zarrs
+        if (!params.skip_ome_zarr) {
+            spotiflow_zarrs = publishOmeZarr.out.published
+        } else {
+            spotiflow_zarrs = Channel
+                .fromList(params.brain_id ? params.brain_id.split(',').collect { it.trim() } : [])
+                .map { key -> tuple(key, "${params.ome_zarr_output_base}/${params.user_name}/${key}/ch1.ome.zarr") }
         }
+        spotiflow_input = spotiflow_zarrs.map { key, zarr ->
+            def out_dir = "${params.ome_zarr_output_base}/${params.user_name}/detection_results/${params.spotiflow_version}/${key}"
+            tuple(key, zarr, out_dir)
+        }
+        spotiflowDetectKuma(spotiflow_input)
     }
 
     // Stop here if registration is skipped
