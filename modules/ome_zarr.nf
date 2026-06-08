@@ -76,6 +76,7 @@ process publishOmeZarr {
 
     output:
     path "publish_log.txt", emit: log
+    tuple val(brain_key), val(zarr_output_path), emit: published
 
     script:
     """

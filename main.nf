@@ -22,6 +22,7 @@ include { brainregEnvInstall;
           organizeChannelsForBrainreg } from './modules/brainreg'
 
 include { omeZarrEnvInstall; convertTiffToOmeZarr; publishOmeZarr; stageFusedCh1 } from './modules/ome_zarr'
+include { spotiflowDetectKuma } from './modules/spotiflow'
 
 // Helper function to ensure parameter is a list
 def ensureList(param) {
@@ -345,7 +346,7 @@ workflow {
         // Extract ch1 file from fused images and pair with brain key
         ch1_for_zarr = fused_images.named_fused_images
             .map { base_name, channel_files ->
-                def file_list = channel_files instanceof List ? channel_files : [channel_files]
+                def file_list = channel_files instanceof List ? new ArrayList(channel_files) : [channel_files]
                 def ch1 = file_list.find { it.name.contains('_C1') }
                 def key = PathUtils.getBaseKey(base_name)
                 return ch1 ? tuple(key, ch1) : null
@@ -359,6 +360,17 @@ workflow {
         ome_zarr_env = omeZarrEnvInstall()
         convertTiffToOmeZarr(ome_zarr_env, ch1_for_zarr)
         publishOmeZarr(convertTiffToOmeZarr.out.zarr_result)
+
+        // Spotiflow spot detection on Kuma (GPU), automatically after the
+        // OME-Zarr is published to the shared /work filesystem.
+        if (params.run_spotiflow) {
+            spotiflow_input = publishOmeZarr.out.published
+                .map { key, zarr ->
+                    def out_dir = "${params.ome_zarr_output_base}/${params.user_name}/detection_results/${params.spotiflow_version}/${key}"
+                    tuple(key, zarr, out_dir)
+                }
+            spotiflowDetectKuma(spotiflow_input)
+        }
     }
 
     // Stop here if fusion_only mode
