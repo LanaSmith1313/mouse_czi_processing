@@ -124,7 +124,6 @@ process stageFilesRSync {
 
 process copyResultsToImageFolder {
     tag "${key}_${combo.collect { k, v -> "${k}${v}" }.join('_')}" // Optional: for logging/identification
-    maxForks 1  // serialize haas<->cluster transfers to avoid bandwidth/disk contention
 
     input:
     tuple val(key), val(output_path), val(combo), path(output_files), val(original_path)
@@ -188,7 +187,6 @@ process copyResultsToImageFolder {
 
 process publishFusedChannelsToSource {
     tag "publish fused channels for ${base_name}"
-    maxForks 1  // serialize haas<->cluster transfers to avoid bandwidth/disk contention
 
     input:
     tuple val(base_name), path(channel_files), val(output_path)
@@ -242,7 +240,6 @@ process publishFusedChannelsToSource {
 
 process stageFilesRSyncSSH {
     tag "stageRSyncSSH_${ssh_path.split('/')[-1]}"
-    maxForks 1  // serialize haas<->cluster transfers to avoid bandwidth/disk contention
 
     // Disable Nextflow's automatic staging
     stageInMode 'copy'
