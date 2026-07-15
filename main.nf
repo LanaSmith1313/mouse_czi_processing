@@ -546,3 +546,88 @@ workflow omeZarrOnly {
     convertTiffToOmeZarr(ome_zarr_env, convert_inputs)
     publishOmeZarr(convertTiffToOmeZarr.out.zarr_result)
 }
+
+// ---------------------------------------------------------------------------
+// Run summary / failure notification.
+//
+// With errorStrategy 'ignore' (see nextflow.config) a failing brain no longer
+// aborts the batch — it just drops out. This handler runs once at the end and
+// reports, for every failed task: WHICH (brain + process, from the task tag),
+// WHERE (the work directory) and WHY (the tail of that task's .command.err).
+// It always writes a report file; emailing it is best-effort.
+// ---------------------------------------------------------------------------
+workflow.onComplete {
+    def lines = []
+    lines << "Nextflow run summary"
+    lines << "===================="
+    lines << "run name   : ${workflow.runName}"
+    lines << "command    : ${workflow.commandLine}"
+    lines << "brains     : ${params.brain_id ?: params.input}"
+    lines << "started    : ${workflow.start}"
+    lines << "completed  : ${workflow.complete}"
+    lines << "duration   : ${workflow.duration}"
+    lines << ""
+
+    // Parse the fixed-name trace for failed/aborted tasks.
+    def failed = []
+    def traceFile = file("${workflow.launchDir}/pipeline_trace.txt")
+    if (traceFile.exists()) {
+        def rows = traceFile.readLines()
+        if (rows.size() > 1) {
+            def idx = [:]
+            rows[0].split('\t').eachWithIndex { h, i -> idx[h] = i }
+            rows.drop(1).each { row ->
+                def c = row.split('\t')
+                def get = { k -> idx.containsKey(k) && idx[k] < c.size() ? c[idx[k]] : '' }
+                if (get('status') in ['FAILED', 'ABORTED']) {
+                    failed << [name: get('name'), status: get('status'),
+                               exit: get('exit'), workdir: get('workdir')]
+                }
+            }
+        }
+    } else {
+        lines << "(no trace file found at ${traceFile} — cannot list per-task failures)"
+    }
+
+    if (failed) {
+        lines << "FAILED / ABORTED TASKS: ${failed.size()}"
+        lines << "------------------------------------------------------------"
+        failed.each { f ->
+            lines << ""
+            lines << "WHICH   : ${f.name}"            // process + tag (includes brain id)
+            lines << "STATUS  : ${f.status} (exit ${f.exit})"
+            lines << "WHERE   : ${f.workdir}"
+            def errf = f.workdir ? file("${f.workdir}/.command.err") : null
+            def logf = f.workdir ? file("${f.workdir}/.command.log") : null
+            def src = (errf && errf.exists() && errf.size() > 0) ? errf
+                    : (logf && logf.exists() ? logf : null)
+            if (src) {
+                lines << "WHY     : last lines of ${src.name} —"
+                src.readLines().takeRight(20).each { lines << "    ${it}" }
+            } else {
+                lines << "WHY     : no .command.err/.command.log in work dir"
+            }
+        }
+    } else if (traceFile.exists()) {
+        lines << "All tasks completed successfully — no failures."
+    }
+
+    def report = lines.join('\n')
+
+    // Always write the report next to where the pipeline was launched.
+    def reportFile = file("${workflow.launchDir}/pipeline_failures_${workflow.runName}.txt")
+    reportFile.text = report
+    log.info "Run summary written to: ${reportFile}"
+
+    // Best-effort email; never let a mail problem crash the handler.
+    if (params.notify_email) {
+        def tag = failed ? "FAILURES (${failed.size()})" : 'OK'
+        def subject = "[nextflow] ${tag}: ${params.brain_id ?: 'run'} — ${workflow.runName}"
+        try {
+            sendMail(to: params.notify_email, subject: subject, body: report)
+            log.info "Summary emailed to ${params.notify_email}"
+        } catch (Exception e) {
+            log.warn "Could not send summary email (${e.message}). Report is at ${reportFile}"
+        }
+    }
+}
