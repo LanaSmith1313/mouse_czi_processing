@@ -31,12 +31,12 @@ def ensureList(param) {
 
 // Map orientation letter to anatomical axis pair
 def letterToAxis(letter) {
-    switch(letter.toUpperCase()) {
-        case 'A': case 'P': return 'AP'
-        case 'S': case 'I': return 'SI'
-        case 'R': case 'L': return 'RL'
-        default: throw new IllegalArgumentException("Unknown orientation letter: ${letter}")
+    def axisMap = ['A': 'AP', 'P': 'AP', 'S': 'SI', 'I': 'SI', 'R': 'RL', 'L': 'RL']
+    def axis = axisMap[letter.toUpperCase()]
+    if (axis == null) {
+        throw new IllegalArgumentException("Unknown orientation letter: ${letter}")
     }
+    return axis
 }
 
 // Permute voxel sizes from any orientation to ASR
@@ -187,7 +187,9 @@ workflow {
             def reorient = params.bigstitcher.reorientation
 
             // Permute voxels if ASR reorientation is enabled
-            def eff_vx = vx, eff_vy = vy, eff_vz = vz
+            def eff_vx = vx
+            def eff_vy = vy
+            def eff_vz = vz
             if (reorient.reorient_to_asr) {
                 def permuted = permuteVoxelsToASR(reorient.raw_orientation, vx, vy, vz)
                 eff_vx = permuted[0]; eff_vy = permuted[1]; eff_vz = permuted[2]
