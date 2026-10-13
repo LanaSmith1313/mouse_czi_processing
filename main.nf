@@ -1,5 +1,5 @@
 #!/usr/bin/env nextflow
-include { setupFiji; useCachedFiji } from './modules/fiji'
+include { setupFiji } from './modules/fiji'
 
 include { stageFilesRSync; copyResultsToImageFolder; stageFilesRSyncSSH; publishFusedChannelsToSource } from './modules/upload_data'
 
@@ -133,13 +133,19 @@ workflow {
 
         // Separate SSH paths from local paths
         images = Channel.fromList(input_files).map { path_str ->
-            if (path_str.contains('@') && path_str.contains(':')) {
+            if (PathUtils.isSshPath(path_str)) {
                 // This is an SSH path - don't try to convert to file object
                 return path_str
-            } /*else {
+            } else {
                 // This is a local path
-                return tuple('local', file(path_str))
-            }*/
+                return file(path_str, checkIfExists: true)
+            }
+        }
+
+        // Publishing steps rsync to the source/analysis tree over SSH, so they
+        // only work for SSH inputs; local inputs are processed but not published
+        if (input_files.any { !PathUtils.isSshPath(it) }) {
+            log.warn "WARNING: local --input paths are processed but not published (publishing needs user@host:/path inputs)."
         }
 
         // Check for duplicate basenames - unique key is required!
@@ -148,10 +154,10 @@ workflow {
             return basename
         }
 
-        def uniqueBasenames = basenames.unique()
-        if (input_files.size() != uniqueBasenames.size()) {
+        def duplicates = basenames.countBy { it }.findAll { name, n -> n > 1 }.keySet()
+        if (duplicates) {
             throw new IllegalArgumentException(
-                "Duplicate basenames found in input files: ${uniqueBasenames[0]}. " +
+                "Duplicate basenames found in input files: ${duplicates.join(', ')}. " +
                 "All input files must have unique basenames."
             )
         }
@@ -167,8 +173,11 @@ workflow {
     def shouldStageFiles = workflow.profile.contains('slurm')
     
     if (shouldStageFiles) {
-        log.info "File staging enabled (profile: ${workflow.profile}, stage_files: ${params.stage_files})"
-        staged_files = stageFilesRSyncSSH(images)
+        log.info "File staging enabled (profile: ${workflow.profile})"
+        // Only SSH inputs need copying to scratch; local files are used in place
+        def ssh_images = images.filter { it instanceof String }
+        def local_images = images.filter { !(it instanceof String) }
+        staged_files = stageFilesRSyncSSH(ssh_images).mix(local_images)
     } else {
         log.info "File staging disabled - using files directly"
         staged_files = images
@@ -240,16 +249,20 @@ workflow {
 
     images_with_keys = images
         .map { original_path ->
-            def key = PathUtils.getBaseKey(original_path)
+            def key = PathUtils.getBaseKey(original_path.toString())
             def output_path = params.user_name
                 ? "${params.ssh_host}:${params.output_base_path}/${params.user_name}/${key}"
                 : null
             tuple(key, original_path, output_path)
         }
 
+    // Only SSH inputs can be published (see warning above)
+    publishable_images = images_with_keys
+        .filter { PathUtils.isSshPath(it[1].toString()) }  // it = [key, original_path, output_path]
+
     // Join by key (inner join - only matching items)
     xml_not_stitched_with_original_paths = xml_with_keys
-        .join(images_with_keys)
+        .join(publishable_images)
         .map { key, xml_file, original_path, output_path ->
             tuple(xml_file, original_path, output_path)
         }
@@ -290,9 +303,9 @@ workflow {
             tuple(key, xml_file)
         }
 
-    // Reuse images_with_keys from earlier (channels can be consumed multiple times)
+    // Reuse publishable_images from earlier (channels can be consumed multiple times)
     xml_with_original_paths = xml_out_with_keys
-        .join(images_with_keys)
+        .join(publishable_images)
         .map { key, xml_file, original_path, output_path ->
             tuple(xml_file, original_path, output_path)
         }
@@ -337,7 +350,7 @@ workflow {
             }
 
         fused_with_output = fused_with_keys
-            .join(images_with_keys)
+            .join(publishable_images)
             .map { key, base_name, channel_files, original_path, output_path ->
                 tuple(base_name, channel_files, output_path)
             }
@@ -488,10 +501,14 @@ workflow {
     // Run brainreg with primary and additional channels
     // (brainreg_install and atlas_cache were created above so organize step
     // could share the same env)
+    // Pass only the params brainreg actually uses: passing the whole params map
+    // would make the task hash depend on every parameter, so any unrelated
+    // change (new brain_id, a skip flag) would re-run all registrations on -resume.
     brr = brainregRunRegistration(brainreg_install,
                            atlas_cache,
                            brainreg_sweep_input,
-                           params)
+                           [brainreg: params.brainreg,
+                            reorientation: params.bigstitcher.reorientation])
 
     // Process the first channel: extract the first element of each tuple
     def processed_results = brr.named_results.map { it ->
@@ -499,8 +516,8 @@ workflow {
         tuple(key, it[1], it[2])
     }
 
-    // Construct output paths for each brain using images_with_keys (which carries output_path)
-    def processed_images = images_with_keys.map { key, original_path, output_path ->
+    // Construct output paths for each brain using publishable_images (which carries output_path)
+    def processed_images = publishable_images.map { key, original_path, output_path ->
         tuple(key, original_path, output_path)
     }
 

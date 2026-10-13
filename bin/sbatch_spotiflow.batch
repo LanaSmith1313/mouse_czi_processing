@@ -31,4 +31,4 @@ micromamba activate "$SPOTIFLOW_ENV"
 
 echo "INFO: Running spotiflow predictions with arguments: $@"
 
-spotiflow-predict $@
+spotiflow-predict "$@"

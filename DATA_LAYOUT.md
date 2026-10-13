@@ -155,7 +155,7 @@ This is configured as `output_base_path` in `nextflow.config` and used automatic
 
 ### Details
 
-- **Enabled with:** `--export_ome_zarr` flag (disabled by default)
+- **Enabled by default** on the slurm profile; skip with `--skip_ome_zarr` (always skipped on the local profile)
 - **Source:** Fused ch1 TIFF from BigStitcher
 - **Format:** OME-Zarr with 6 resolution levels, chunk size `(1,1,256,256,256)`
 - **Path:** `/work/lsens/<user_name>/<brain_id>/ch1.ome.zarr`
@@ -189,19 +189,20 @@ All outputs are published to the analysis tree (`output_base_path`):
 - Each channel from BigStitcher fusion is published to its own subfolder
 - Example: `Lana_Smith/MS181/ch0/`, `Lana_Smith/MS181/ch1/`
 
-**OME-Zarr** (published to `/work/lsens/<user_name>/<brain_id>/`, optional):
+**OME-Zarr** (published to `/work/lsens/<user_name>/<brain_id>/`, on by default):
 - `ch1.ome.zarr` - Multi-resolution pyramid of the fused ch1 channel
-- Only generated when `--export_ome_zarr` is passed
+- Skipped when `--skip_ome_zarr` is passed
 
 **Registration Results** (published to `<user_name>/<brain_id>/registration/`):
-- Subdirectories named with parameter combinations
-- Format: `<brain_id>_bending_energy_weight<value>_grid_spacing<value>_smoothing_sigma_floating<value>/`
+- Subdirectories named with parameter combinations, including the atlas used
+- Format: `<brain_id>_atlas<value>_bending_energy_weight<value>_grid_spacing<value>_smoothing_sigma_floating<value>/`
+- `atlas` isn't swept (one value per run, from `params.brainreg.atlas` in `nextflow.config`), but it's included in the folder name so that re-registering with a different atlas doesn't overwrite a previous run's results under the same path.
 
 ### Example Workflow
 
 ```bash
 # Command
-nextflow run main.nf -resume -profile slurm --brain_id MS181 --user_name Lana_Smith --export_ome_zarr
+nextflow run main.nf -resume -profile slurm --brain_id MS181 --user_name Lana_Smith
 
 # Input read from:
 # lmsmith@haas056.rcp.epfl.ch:/mnt/lsens-data/MS181/Anatomy/MS181.czi
@@ -211,9 +212,9 @@ nextflow run main.nf -resume -profile slurm --brain_id MS181 --user_name Lana_Sm
 # lmsmith@haas056.rcp.epfl.ch:/mnt/lsens-analysis/Lana_Smith/MS181/MS181_registered.xml
 # lmsmith@haas056.rcp.epfl.ch:/mnt/lsens-analysis/Lana_Smith/MS181/ch0/<fused_C0>.tiff
 # lmsmith@haas056.rcp.epfl.ch:/mnt/lsens-analysis/Lana_Smith/MS181/ch1/<fused_C1>.tiff
-# /work/lsens/Lana_Smith/MS181/ch1.ome.zarr  (only with --export_ome_zarr)
-# lmsmith@haas056.rcp.epfl.ch:/mnt/lsens-analysis/Lana_Smith/MS181/registration/MS181_bending_energy_weight0.3_grid_spacing4_smoothing_sigma_floating-1/
-# lmsmith@haas056.rcp.epfl.ch:/mnt/lsens-analysis/Lana_Smith/MS181/registration/MS181_bending_energy_weight0.8_grid_spacing4_smoothing_sigma_floating-1/
+# /work/lsens/Lana_Smith/MS181/ch1.ome.zarr  (unless --skip_ome_zarr)
+# lmsmith@haas056.rcp.epfl.ch:/mnt/lsens-analysis/Lana_Smith/MS181/registration/MS181_atlasallen_mouse_bluebrain_barrels_10um_bending_energy_weight0.3_grid_spacing4_smoothing_sigma_floating-1/
+# lmsmith@haas056.rcp.epfl.ch:/mnt/lsens-analysis/Lana_Smith/MS181/registration/MS181_atlasallen_mouse_bluebrain_barrels_10um_bending_energy_weight0.8_grid_spacing4_smoothing_sigma_floating-1/
 ```
 
 ---

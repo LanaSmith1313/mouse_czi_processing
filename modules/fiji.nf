@@ -44,18 +44,3 @@ process setupFiji {
     """
 }
 
-process useCachedFiji {
-    tag 'fiji-cached'
-    
-    output:
-    path "${params.fiji_cache_dir}", emit: fiji_ready
-    
-    when:
-    file("${params.fiji_cache_dir}/Fiji.app").exists()
-    
-    exec:
-    """
-    echo "Using cached Fiji installation from ${params.fiji_cache_dir}"
-    """
-}
-

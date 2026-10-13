@@ -101,11 +101,22 @@ The pipeline follows this processing flow:
    - Registration results are published to: `<output_base_path>/<user_name>/<brain_id>/registration/`
    - If `--user_name` is not set, a warning is shown and publishing is disabled
 
+5. **OME-Zarr Export** (modules/ome_zarr.nf, on by default; skip with `--skip_ome_zarr`)
+   - `stageFusedCh1()`: Copies the fused ch1 TIFF to the cluster
+   - `convertTiffToOmeZarr()`: Converts it to `ch1.ome.zarr`
+   - `publishOmeZarr()`: Publishes it to `<ome_zarr_output_base>/<user_name>/<brain_id>/ch1.ome.zarr`
+
+6. **Spotiflow Spot Detection** (modules/spotiflow.nf, runs after the OME-Zarr publish; skip with `--skip_spotiflow`)
+   - `spotiflowDetectKuma()`: Submits `bin/sbatch_spotiflow.batch` to the Kuma GPU cluster over SSH and polls until it finishes
+   - Results go to `<user_name>/detection_results/<spotiflow_version>/<brain_id>`
+
+The `local` profile skips both OME-Zarr and Spotiflow, since they need `/work` and Kuma.
+
 ## Key Technical Details
 
 ### File Naming and Basenames
 
-The pipeline relies heavily on basename matching to track files through processing stages. All input files **must have unique basenames** (filename without extension). The pipeline strips various suffixes (`_bigstitcher`, `_aligned`, `_tile`, `_icp_refined`, `_asr`) to match files across stages.
+The pipeline relies heavily on basename matching to track files through processing stages. All input files **must have unique basenames** (filename without extension). The pipeline strips various suffixes (`_bigstitcher`, `_aligned`, `_tile`, `_icp_refined`, `_asr`, `_C<n>`) to match files across stages. These suffixes are only stripped from the end of the name (`PathUtils.getBaseKey`).
 
 ### Parameter Sweeps
 
@@ -126,8 +137,11 @@ The pipeline generates all combinations of sweep parameters and runs registratio
 - **local**: Uses Apptainer containers, runs processes locally
 - **slurm**: Submits jobs to SLURM cluster with resource allocations
   - Most processes: 64GB RAM, 16 CPUs, 4h
-  - Heavy processes (alignChannels, alignTiles, fuse): 400GB RAM, 32 CPUs, 8h on bigmem queue
-  - File transfer processes: run locally without SLURM submission
+  - Heavy processes (alignChannels, alignTiles, fuse, OME-Zarr conversion): 480GB RAM, 40 CPUs, 8h on bigmem queue
+  - CZI download (`stageFilesRSyncSSH`): small SLURM job (2 CPUs, 8GB) with a 12h limit, since large CZIs can take hours
+  - Fused-channel upload (`publishFusedChannelsToSource`): small SLURM job, 12h
+  - Other publish/transfer processes: run locally without SLURM submission
+  - Transfers are serialized (`--max_concurrent_transfers`, default 1)
 
 ### Cache Directories
 
@@ -157,7 +171,7 @@ The `fuseBigStitcherDataset` always splits output by channel. The `organizeChann
 
 ### SSH File Transfer
 
-The `stageFilesRSyncSSH` process handles SSH paths (detected by `@` and `:` characters). It uses rsync over SSH with retry logic, progress monitoring, and checksum verification. Node memory is increased to 60GB for large file transfers.
+The `stageFilesRSyncSSH` process handles SSH paths (detected by `@` and `:` characters). It uses rsync over SSH with retry logic, progress monitoring, and checksum verification. On SLURM it runs as a small compute-node job with a 12h time limit (see `nextflow.config`).
 
 ### Cross-Channel Matching
 

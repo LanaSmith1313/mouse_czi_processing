@@ -45,7 +45,7 @@ process spotiflowDetectKuma {
     # (MaxStartups -> "kex_exchange_identification: Connection closed"). Stagger
     # the initial burst and retry submission with backoff + jitter so transient
     # ssh rejections don't fail the task. sbatch_spotiflow.batch runs
-    # `spotiflow-predict \$@`; the --parsable job id is the only all-digits line.
+    # `spotiflow-predict "\$@"`; the --parsable job id is the only all-digits line.
     sleep \$((RANDOM % 20))
     JOBID=""
     for attempt in 1 2 3 4 5 6 7 8; do

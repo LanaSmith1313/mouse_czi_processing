@@ -20,13 +20,16 @@ class PathUtils {
      */
     static String getBaseKey(String pathStr) {
         def basename = extractBasename(pathStr)
-        return basename
-            .replaceAll(/_bigstitcher/, '')
-            .replaceAll(/_aligned/, '')
-            .replaceAll(/_tile/, '')
-            .replaceAll(/_icp_refined/, '')
-            .replaceAll(/_asr/, '')
-            .replaceAll(/_C\d+/, '')  // Remove channel suffixes like _C0, _C1, etc.
+        // Only strip suffixes at the END of the name, so a brain ID that happens
+        // to contain e.g. "_tile" or "_C2" isn't mangled into another brain's key
+        return basename.replaceAll(/(?:_(?:bigstitcher|aligned|tile|icp_refined|asr|C\d+))+$/, '')
+    }
+
+    /**
+     * True for remote "user@host:/path" inputs, false for local paths
+     */
+    static boolean isSshPath(String pathStr) {
+        return pathStr.contains('@') && pathStr.contains(':')
     }
 
     /**

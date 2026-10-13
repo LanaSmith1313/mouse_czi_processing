@@ -1,37 +1,3 @@
-process stageFiles {
-    tag "stage_${file(input_file).name}"
-    
-    input:
-    path input_file
-    
-    output:
-    path "${file(input_file).name}", emit: staged_file
-    
-    script:
-    """
-    # Nextflow automatically stages the input file to the work directory
-    # We can use rsync for a robust copy with verification
-    
-    echo "Staging file: ${input_file}"
-    echo "Current directory: \$(pwd)"
-    echo "File size: \$(stat -c%s "${input_file}" 2>/dev/null || stat -f%z "${input_file}" 2>/dev/null) bytes"
-    
-    # The file is already staged by Nextflow, but we can verify it
-    if [ -f "${file(input_file).name}" ]; then
-        echo "File successfully staged: ${file(input_file).name}"
-        
-        # Optional: Calculate checksum for verification
-        if command -v md5sum &> /dev/null; then
-            MD5_CHECKSUM=\$(md5sum "${file(input_file).name}" | cut -d' ' -f1)
-            echo "MD5 checksum: \$MD5_CHECKSUM"
-        fi
-    else
-        echo "ERROR: Staged file not found!"
-        exit 1
-    fi
-    """
-}
-
 process stageFilesRSync {
     tag "stageRSync_${file(input_file).name}"
     

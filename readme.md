@@ -1,3 +1,5 @@
+> The current documentation is in [README_NEW.md](README_NEW.md).
+
 # Nextflow processing pipeline for mouse brain CZI files
 
 This pipeline is taking one or several big Zeiss CZI image files of mouse brains, stitch them, fuse them, then register them using BrainGlobe atlases and registration tools.

@@ -125,8 +125,8 @@ process brainregRunRegistration {
     params_brainreg = config.brainreg
     
     def orientation
-    if (!config.bigstitcher.reorientation.reorient_to_asr) {
-        orientation = config.bigstitcher.reorientation.raw_orientation.toLowerCase()
+    if (!config.reorientation.reorient_to_asr) {
+        orientation = config.reorientation.raw_orientation.toLowerCase()
     } else {
         orientation = "asr"
     }
