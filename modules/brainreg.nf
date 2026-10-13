@@ -105,7 +105,7 @@ process organizeChannelsForBrainreg {
 process brainregRunRegistration {
     container 'python:3.11'
     // Updated tag to include parameter combination info
-    tag "brainreg_${image_name}_bending${param_combo.bending_energy_weight}_grid${param_combo.grid_spacing}_sigma${param_combo.smoothing_sigma_floating}"
+    tag "brainreg_${image_name}_atlas${param_combo.atlas}_bending${param_combo.bending_energy_weight}_grid${param_combo.grid_spacing}_sigma${param_combo.smoothing_sigma_floating}"
     
     // Updated publishDir to organize outputs by parameter combination
     // publishDir "${params.outdir}/brainreg_output/${image_name}_bending${param_combo.bending_energy_weight}_grid${param_combo.grid_spacing}_sigma${param_combo.smoothing_sigma_floating}", mode: 'copy'
@@ -151,6 +151,7 @@ process brainregRunRegistration {
     
     echo "Processing image: ${image_name}"
     echo "Parameter combination:"
+    echo "  atlas: ${param_combo.atlas}"
     echo "  bending_energy_weight: ${param_combo.bending_energy_weight}"
     echo "  grid_spacing: ${param_combo.grid_spacing}"
     echo "  smoothing_sigma_floating: ${param_combo.smoothing_sigma_floating}"
@@ -219,6 +220,7 @@ process brainregRunRegistration {
     done
 
     echo "Brainreg processing completed for parameter combination:"
+    echo "  atlas: ${param_combo.atlas}"
     echo "  bending_energy_weight: ${param_combo.bending_energy_weight}"
     echo "  grid_spacing: ${param_combo.grid_spacing}"
     echo "  smoothing_sigma_floating: ${param_combo.smoothing_sigma_floating}"

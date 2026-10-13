@@ -463,17 +463,23 @@ workflow {
     param_combinations = bending_energy_ch
         .combine(grid_spacing_ch)
         .combine(smoothing_sigma_ch)
-        .map { bending, grid, sigma -> 
+        .map { bending, grid, sigma ->
             [
+                // atlas isn't swept (still a single value from config), but it's
+                // included here so it flows into copyResultsToImageFolder's
+                // paramsString -- otherwise two runs that only differ by atlas
+                // would publish to the same folder name and silently overwrite
+                // each other's results.
+                atlas: params.brainreg.atlas,
                 bending_energy_weight: bending,
                 grid_spacing: grid,
                 smoothing_sigma_floating: sigma
             ]
         }
-    
+
     // Log the parameter combinations that will be tested
     param_combinations.view { combo ->
-        "Parameter combination: bending_energy_weight=${combo.bending_energy_weight}, grid_spacing=${combo.grid_spacing}, smoothing_sigma_floating=${combo.smoothing_sigma_floating}"
+        "Parameter combination: atlas=${combo.atlas}, bending_energy_weight=${combo.bending_energy_weight}, grid_spacing=${combo.grid_spacing}, smoothing_sigma_floating=${combo.smoothing_sigma_floating}"
     }
     
     // Cross brainreg input with parameter combinations

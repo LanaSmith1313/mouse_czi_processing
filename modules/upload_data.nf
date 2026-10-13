@@ -253,10 +253,20 @@ process stageFilesRSyncSSH {
     script:
     def filename = ssh_path.split('/')[-1]
     """
-    rsync -avz --progress "${ssh_path}" ./
-    
+    # Fast-path: if a pre-staged copy exists in the prestage dir, symlink to it
+    # (resolving through any symlink) instead of re-downloading from haas. This
+    # lets you pre-position large CZIs on scratch and have resume pick them up.
+    PRESTAGE="/scratch/${System.getProperty('user.name')}/czi_prestage/${filename}"
+    if [ -e "\$PRESTAGE" ]; then
+        echo "Using pre-staged ${filename} from \$PRESTAGE"
+        ln -s "\$(readlink -f "\$PRESTAGE")" "./${filename}"
+    else
+        echo "No pre-staged copy found; downloading ${filename} from haas"
+        rsync -avz --progress "${ssh_path}" ./
+    fi
+
     if [ ! -f "${filename}" ]; then
-        echo "ERROR: File transfer failed"
+        echo "ERROR: File transfer failed (no ${filename} produced)"
         exit 1
     fi
     """
