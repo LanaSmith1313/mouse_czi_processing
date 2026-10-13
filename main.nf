@@ -23,10 +23,31 @@ include { brainregEnvInstall;
 
 include { omeZarrEnvInstall; convertTiffToOmeZarr; publishOmeZarr; stageFusedCh1 } from './modules/ome_zarr'
 include { spotiflowDetectKuma } from './modules/spotiflow'
+include { regQcEnvInstall;
+          selectBestRegistration;
+          transformPointsToAtlas;
+          publishFilesToSource as publishRegistrationQcToSource;
+          publishFilesToSource as publishDetectionsToSource } from './modules/registration_qc'
 
 // Helper function to ensure parameter is a list
 def ensureList(param) {
     return param instanceof List ? param : [param]
+}
+
+// Remote (NAS) folder of one brain in the analysis tree, optionally nested in
+// --analysis_subfolder: <output_base_path>/<user_name>[/<analysis_subfolder>]/<key>
+def brainOutputDir(key) {
+    def parts = [params.output_base_path, params.user_name]
+    if (params.analysis_subfolder) {
+        parts << params.analysis_subfolder.toString().replaceAll('^/+|/+$', '')
+    }
+    parts << key
+    return parts.join('/')
+}
+
+// Registration folder name, as copyResultsToImageFolder publishes it
+def variantName(key, combo) {
+    return "${key}_" + combo.collect { k, v -> "${k}${v}" }.join('_')
 }
 
 // Map orientation letter to anatomical axis pair
@@ -95,7 +116,7 @@ workflow {
                 log.info "Brain: ${key}"
                 log.info "  Input:  ${path_str}"
                 if (params.user_name) {
-                    def output_base = "${params.ssh_host}:${params.output_base_path}/${params.user_name}/${key}"
+                    def output_base = "${params.ssh_host}:${brainOutputDir(key)}"
                     log.info "  Output: ${output_base}/"
                     log.info "    XML:          ${output_base}/${key}_unregistered.xml"
                     log.info "    XML:          ${output_base}/${key}_registered.xml"
@@ -104,6 +125,14 @@ workflow {
                         log.info "    OME-Zarr:     ${params.ome_zarr_output_base}/${params.user_name}/${key}/ch1.ome.zarr"
                     }
                     log.info "    Registration: ${output_base}/registration/${key}_<param_combo>/"
+                    if (!params.skip_registration_selection) {
+                        log.info "    Reg. QC:      ${output_base}/registration/registration_qc/"
+                        log.info "                  ${params.ome_zarr_output_base}/${params.user_name}/${key}/registration_qc/"
+                        if (!params.skip_points_to_atlas) {
+                            log.info "    Points:       ${output_base}/detection/${params.spotiflow_version}/"
+                            log.info "                  ${params.ome_zarr_output_base}/${params.user_name}/detection_results/${params.spotiflow_version}/${key}/"
+                        }
+                    }
                 } else {
                     log.info "  Output: NOT CONFIGURED (set --user_name to enable)"
                 }
@@ -251,7 +280,7 @@ workflow {
         .map { original_path ->
             def key = PathUtils.getBaseKey(original_path.toString())
             def output_path = params.user_name
-                ? "${params.ssh_host}:${params.output_base_path}/${params.user_name}/${key}"
+                ? "${params.ssh_host}:${brainOutputDir(key)}"
                 : null
             tuple(key, original_path, output_path)
         }
@@ -532,10 +561,94 @@ workflow {
         copyResultsToImageFolder(result_and_paths)
     }
 
+    // ---------------------------------------------------------------------
+    // Registration selection: score every variant of a brain, pick the best,
+    // draw the QC figures, then push the spotiflow detections into atlas
+    // space through the chosen registration (whatever its verdict; the
+    // verdict is written next to the points in registration_choice.json).
+    // ---------------------------------------------------------------------
+    if (params.skip_registration_selection) {
+        return
+    }
+
+    // A brain moves on as soon as all of its own variants are done; with
+    // errorStrategy 'ignore' a failed variant only shrinks the group.
+    def n_combos = ensureList(params.brainreg.bending_energy_weight).size() *
+                   ensureList(params.brainreg.grid_spacing).size() *
+                   ensureList(params.brainreg.smoothing_sigma_floating).size()
+    variants_by_brain = brr.variant_dir
+        .map { image_name, combo, dir ->
+            def key = PathUtils.getBaseKey(image_name)
+            tuple(key, variantName(key, combo), dir)
+        }
+        .groupTuple(size: n_combos, remainder: true)
+
+    regqc_env = regQcEnvInstall()
+    selectBestRegistration(regqc_env, atlas_cache, variants_by_brain)
+
+    if (params.user_name && !params.skip_registration_transfer) {
+        publishRegistrationQcToSource(
+            selectBestRegistration.out.qc
+                .join(publishable_images)
+                .map { key, qc_dir, original_path, output_path ->
+                    tuple(key, qc_dir, output_path, "registration")
+                })
+    }
+
+    if (params.skip_points_to_atlas || !params.user_name) {
+        return
+    }
+
+    // (key, selected variant name, its brainreg_output dir, evaluation.json)
+    selected_registration = selectBestRegistration.out.selected
+        .join(variants_by_brain)
+        .map { key, selected, evaluation, names, dirs ->
+            def name = selected.trim()
+            def dir_list = dirs instanceof List ? dirs : [dirs]
+            tuple(key, name, dir_list[names.indexOf(name)], evaluation)
+        }
+
+    // Detections: from this run's spotiflow, or (with --skip_spotiflow) an
+    // existing ch1.csv on /work, as the spotiflow branch does for the zarr.
+    def detections
+    if (!params.skip_spotiflow) {
+        detections = spotiflowDetectKuma.out.detections
+    } else {
+        detections = images_with_keys.map { key, original_path, output_path ->
+            tuple(key, "${params.ome_zarr_output_base}/${params.user_name}/detection_results/${params.spotiflow_version}/${key}")
+        }
+    }
+    detections = detections.filter { key, det_dir ->
+        def ok = file("${det_dir}/ch1.csv").exists()
+        if (!ok) log.warn "No detections at ${det_dir}/ch1.csv - skipping points-to-atlas for ${key}"
+        ok
+    }
+
+    points_input = selected_registration
+        .join(detections)
+        .map { key, name, dir, evaluation, det_dir ->
+            def zarr = "${params.ome_zarr_output_base}/${params.user_name}/${key}/ch1.ome.zarr"
+            def zarr_meta = file("${zarr}/0/.zarray").exists() ? file("${zarr}/0/.zarray") : file("${zarr}/0/zarr.json")
+            tuple(key, name, dir, evaluation, file("${det_dir}/ch1.csv"), zarr_meta, det_dir)
+        }
+    transformPointsToAtlas(brainreg_install, atlas_cache, points_input)
+
+    if (!params.skip_results_transfer) {
+        publishDetectionsToSource(
+            transformPointsToAtlas.out.points
+                .join(detections)
+                .join(publishable_images)
+                .map { key, point_files, det_dir, original_path, output_path ->
+                    def files = point_files instanceof List ? point_files : [point_files]
+                    tuple(key, files + [file("${det_dir}/ch1.csv")], output_path,
+                          "detection/${params.spotiflow_version}")
+                })
+    }
+
 }
 
 // OME-Zarr-only entry point: skip stitching/fusion/brainreg entirely and convert
-// already-fused ch1 TIFFs (published under <output_base_path>/<user_name>/<key>/ch1/)
+// already-fused ch1 TIFFs (published under <output_base_path>/<user_name>[/<analysis_subfolder>]/<key>/ch1/)
 // straight to OME-Zarr on local cluster storage.
 //
 // Usage:
@@ -554,7 +667,7 @@ workflow omeZarrOnly {
 
     // Stage the already-fused ch1 TIFF for each brain from the remote analysis tree
     stage_inputs = Channel.fromList(keys).map { key ->
-        def remote_ch1_dir = "${params.output_base_path}/${params.user_name}/${key}/ch1"
+        def remote_ch1_dir = "${brainOutputDir(key)}/ch1"
         tuple(key, params.ssh_host, remote_ch1_dir)
     }
     staged = stageFusedCh1(stage_inputs)
@@ -642,15 +755,31 @@ workflow.onComplete {
     reportFile.text = report
     log.info "Run summary written to: ${reportFile}"
 
-    // Best-effort email; never let a mail problem crash the handler.
-    if (params.notify_email) {
+    // Best-effort notification; never let a mail problem crash the handler.
+    // The login nodes' sendmail has no relay (mail is queued and never leaves)
+    // and EPFL's SMTP relay requires authentication, so the notice goes out
+    // through Slurm's own job mail instead: a one-minute job whose name is the
+    // subject. Slurm mails only the name and state, so the subject stays short
+    // and the details are in the report file (pipeline_failures_<run>.txt).
+    if (params.notify_email && params.notify_email != true) {
         def tag = failed ? "FAILURES (${failed.size()})" : 'OK'
-        def subject = "[nextflow] ${tag}: ${params.brain_id ?: 'run'} — ${workflow.runName}"
+        def subject = "[nextflow] ${tag}: ${params.brain_id ?: 'run'}"
+            .replaceAll(/[^\w\s\[\]():,.+-]/, '_')
+        def cmd = ['sbatch', '--parsable', "--job-name=${subject}", '--mail-type=END',
+                   "--mail-user=${params.notify_email}", '--partition=standard',
+                   '--time=00:01:00', '--cpus-per-task=1', '--mem=100M',
+                   '--output=/dev/null', '--error=/dev/null', '--wrap=true']
         try {
-            sendMail(to: params.notify_email, subject: subject, body: report)
-            log.info "Summary emailed to ${params.notify_email}"
+            def proc = cmd.collect { it.toString() }.execute()
+            def out = new StringBuilder(), err = new StringBuilder()
+            proc.waitForProcessOutput(out, err)
+            if (proc.exitValue() == 0) {
+                log.info "Summary notice for ${params.notify_email} sent via Slurm mail job ${out.toString().trim()}"
+            } else {
+                log.warn "Could not submit the Slurm mail job (${err.toString().trim()}). Report is at ${reportFile}"
+            }
         } catch (Exception e) {
-            log.warn "Could not send summary email (${e.message}). Report is at ${reportFile}"
+            log.warn "Could not submit the Slurm mail job (${e.message}). Report is at ${reportFile}"
         }
     }
 }

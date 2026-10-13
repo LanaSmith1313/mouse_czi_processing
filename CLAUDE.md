@@ -110,7 +110,14 @@ The pipeline follows this processing flow:
    - `spotiflowDetectKuma()`: Submits `bin/sbatch_spotiflow.batch` to the Kuma GPU cluster over SSH and polls until it finishes
    - Results go to `<user_name>/detection_results/<spotiflow_version>/<brain_id>`
 
-The `local` profile skips both OME-Zarr and Spotiflow, since they need `/work` and Kuma.
+7. **Registration selection + points to atlas** (modules/registration_qc.nf; skip with `--skip_registration_selection` / `--skip_points_to_atlas`)
+   - `selectBestRegistration()`: once all sweep variants of a brain are done (`groupTuple` by brain key), runs `bin/registration_select.py`. It scores every variant in brain space (`bin/registration_scoring.py`), picks the best, writes a verdict and draws two figures (`bin/registration_figures.py`) into `registration_qc/`.
+   - `transformPointsToAtlas()`: runs `bin/points_to_atlas.py` to push the spotiflow `ch1.csv` through the chosen variant's deformation fields. Writes `all_points.csv`, `summary.csv`, `registration_choice.json`, ... into the detection folder on `/work`.
+   - `publishRegistrationQcToSource` / `publishDetectionsToSource` (both `publishFilesToSource`): copy `registration_qc/` to `<brain>/registration/` and the points to `<brain>/detection/<spotiflow_version>/` on the NAS.
+
+The `local` profile skips OME-Zarr, Spotiflow and points-to-atlas, since they need `/work` and Kuma.
+
+NAS brain folders are `<output_base_path>/<user_name>[/<analysis_subfolder>]/<brain_id>`; always build them with `brainOutputDir(key)` in `main.nf`.
 
 ## Key Technical Details
 

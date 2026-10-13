@@ -120,6 +120,7 @@ process brainregRunRegistration {
     path "brainreg_output/*", emit: registered_brain
     path "brainreg_log.txt", emit: log
     tuple val(image_name), val(param_combo), path("brainreg_output/*"), emit: named_results
+    tuple val(image_name), val(param_combo), path("brainreg_output"), emit: variant_dir
 
     script:
     params_brainreg = config.brainreg

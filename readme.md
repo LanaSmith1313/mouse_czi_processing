@@ -98,9 +98,18 @@ This automatically constructs paths based on the data layout:
 
 The `ssh_host`, `input_base_path`, and `output_base_path` are configured in `nextflow.config` and rarely need overriding.
 
+To nest the brain folders in a project folder on the NAS, add `--analysis_subfolder`:
+
+```bash
+# publishes to /mnt/lsens-analysis/Lana_Smith/cre_anatomy/MS214/...
+nextflow run main.nf -resume -profile slurm --brain_id MS214 --user_name Lana_Smith --analysis_subfolder cre_anatomy -with-trace
+```
+
+This applies to everything published to the NAS (XMLs, `ch0/`, `ch1/`, `registration/`, `detection/`) and to where `-entry omeZarrOnly` reads `ch1/` from. Paths on `/work` (OME-Zarr, `detection_results/`) are not affected.
+
 ### Pipeline steps and skip flags
 
-By default the pipeline runs **all** steps: stitch → fuse → publish results to NAS → OME-Zarr → spotiflow → registration → publish registration. Each step can be turned off with a `--skip_*` flag:
+By default the pipeline runs **all** steps: stitch → fuse → publish results to NAS → OME-Zarr → spotiflow → registration → publish registration → pick the best registration → spotiflow points to atlas → publish points. Each step can be turned off with a `--skip_*` flag:
 
 | Flag | Skips |
 |---|---|
@@ -108,7 +117,9 @@ By default the pipeline runs **all** steps: stitch → fuse → publish results 
 | `--skip_ome_zarr` | the ch1 → OME-Zarr conversion (and therefore spotiflow) |
 | `--skip_spotiflow` | the spotiflow GPU spot detection on Kuma |
 | `--skip_registration` | the brainreg registration (stops after fusion) |
-| `--skip_registration_transfer` | copying the registration results to the NAS |
+| `--skip_registration_transfer` | copying the registration results (and `registration_qc/`) to the NAS |
+| `--skip_registration_selection` | scoring the sweep and picking the best registration (also skips points-to-atlas) |
+| `--skip_points_to_atlas` | transforming the spotiflow detections with the chosen registration |
 
 ```bash
 # Default: everything runs
@@ -157,6 +168,20 @@ Predictions are written to `<ome_zarr_output_base>/<user_name>/detection_results
    # e.g. /work/lsens/envs/spotiflow_12
    ```
 3. **Place the model** under `<models_dir>/<spotiflow_model>` (e.g. `/work/lsens/models/spotiflow_scratch_annotated_clean_.../`).
+
+### Choosing the best registration and moving the points to atlas space
+
+After the brainreg sweep (`brainreg.bending_energy_weight` × `grid_spacing` × `smoothing_sigma_floating` in `nextflow.config`), each brain's variants are scored and the best one is picked:
+
+1. **Scoring** (`selectBestRegistration`, `bin/registration_select.py`). Each variant gets a brain-space Dice score: how well its warped atlas outline matches the tissue segmented from the downsampled ch0. The downsampled image is the same in every variant, so only the atlas moves between them. Variants whose warp is implausibly distorted (`distortion_sd` > 2× the prior median) are rejected. Among the rest, all variants within `tau` = 0.005 Dice of the best count as tied, and the smoothest of them is picked. The method comes from `~/scripts/automatic_registration` (see `registration_search_design.md` there).
+2. **Verdict**: the best Dice is compared with the prior quality levels in `params.registration_qc`, giving GOOD / CHECK / BAD (`good`, `good (borderline)`, `mediocre`, `check mask`, `failed`, `catastrophic`) and a suggested next step. Nothing beyond the sweep is registered automatically.
+3. **Figures**, in `registration_qc/`:
+   - `<brain>_registration_variants.png`: every variant at the same coronal, horizontal and sagittal planes, chosen one framed in green, verdict in the header;
+   - `<brain>_registration_best.png`: the chosen variant over 8 coronal slices plus a horizontal (transversal) and a sagittal view.
+   `registration_qc/` also holds `scores.csv`, `evaluation.json` and `selected.txt`. It is written to `<ome_zarr_output_base>/<user_name>/<brain_id>/registration_qc/` and to `<NAS brain folder>/registration/registration_qc/`.
+4. **Points to atlas** (`transformPointsToAtlas`, `bin/points_to_atlas.py`). The spotiflow `ch1.csv` is pushed through the chosen registration's deformation fields and summarised per atlas region. This happens whatever the verdict; check `registration_choice.json` for it. The full-res shape is read from the OME-Zarr, and voxel sizes and orientation come from the registration's `brainreg.json`. Outputs (`downsampled.points`, `atlas.points`, `all_points.csv`, `summary.csv`, `registration_choice.json`) go to `<ome_zarr_output_base>/<user_name>/detection_results/<spotiflow_version>/<brain_id>/`. Together with `ch1.csv` they are also copied to `<NAS brain folder>/detection/<spotiflow_version>/`.
+
+With `--skip_spotiflow`, an existing `ch1.csv` in the `detection_results` folder is used if there is one.
 
 ### Dry Run (preview paths without processing)
 

@@ -121,6 +121,10 @@ servers/analysis/
 - `<brain_id>_unregistered.xml` - BigStitcher XML before stitching
 - `<brain_id>_registered.xml` - BigStitcher XML after stitching
 - `registration/` - Brain registration results from brainreg
+  - `registration/registration_qc/` - scores of every variant, the chosen one (`selected.txt`, `evaluation.json`) and the two QC figures
+- `detection/<spotiflow_version>/` - spotiflow detections (`ch1.csv`) and their atlas-space results (`atlas.points`, `all_points.csv`, `summary.csv`, `registration_choice.json`)
+
+With `--analysis_subfolder <name>` the brain folders sit one level deeper: `<Full_Name>/<name>/<brain_id>/`.
 
 ### SSH Access
 
