@@ -605,7 +605,11 @@ workflow {
         .map { key, selected, evaluation, names, dirs ->
             def name = selected.trim()
             def dir_list = dirs instanceof List ? dirs : [dirs]
-            tuple(key, name, dir_list[names.indexOf(name)], evaluation)
+            // variantName() returns a GString, which never equals a String, so
+            // compare as Strings; a -1 index would silently pick the last dir.
+            def idx = names.collect { it.toString() }.indexOf(name)
+            if (idx < 0) error "Selected variant ${name} not among ${key}'s variants"
+            tuple(key, name, dir_list[idx], evaluation)
         }
 
     // Detections: from this run's spotiflow, or (with --skip_spotiflow) an

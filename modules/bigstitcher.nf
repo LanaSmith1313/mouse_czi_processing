@@ -56,7 +56,7 @@ process alignChannelsWithBigstitcher {
     
     # Build the parameter string with proper quoting
     
-    PARAMS="xml_file=\\\""\${FULL_XML_PATH}"\\\",pairwise_shifts_downsamples_x=${psd.x},pairwise_shifts_downsamples_y=${psd.y},pairwise_shifts_downsamples_z=${psd.z},filter_min_r=${ca.filter_min_r}"
+    PARAMS="xml_file=\\\""\${FULL_XML_PATH}"\\\",pairwise_shifts_downsamples_x=${psd.x},pairwise_shifts_downsamples_y=${psd.y},pairwise_shifts_downsamples_z=${psd.z},filter_min_r=${ca.filter_min_r},filter_max_shift=${ca.filter_max_shift}"
 
     echo "Parameters: \${PARAMS}"
 

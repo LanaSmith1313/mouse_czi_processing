@@ -211,11 +211,19 @@ def main():
           f"{evaluation['selected_label']} (Dice {evaluation['dice']:.4f})", flush=True)
     print(evaluation["evaluation"], flush=True)
 
+    # Single-channel brains have no C1: draw the registration channel (C0) instead
+    display_channel = args.display_channel
+    try:
+        registration_scoring.downsampled_path(next(iter(variants.values())), display_channel)
+    except FileNotFoundError:
+        print(f"WARNING: no downsampled C{display_channel}, drawing figures on C0", flush=True)
+        display_channel = 0
+
     registration_figures.render_all_variants(
-        args.brain, table, evaluation, variants, cache, args.display_channel,
+        args.brain, table, evaluation, variants, cache, display_channel,
         args.out / f"{args.brain}_registration_variants.png")
     registration_figures.render_best(
-        args.brain, table, evaluation, variants, cache, args.display_channel,
+        args.brain, table, evaluation, variants, cache, display_channel,
         args.out / f"{args.brain}_registration_best.png")
 
 

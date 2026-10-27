@@ -3,11 +3,13 @@
 #@int pairwise_shifts_downsamples_y
 #@int pairwise_shifts_downsamples_z
 #@double filter_min_r
+#@double filter_max_shift
 
 print("Channel Alignment Parameters:");
 print("XML file: " + xml_file);
 print("Pairwise shifts downsamples - x: " + pairwise_shifts_downsamples_x + ", y: " + pairwise_shifts_downsamples_y + ", z: " + pairwise_shifts_downsamples_z);
 print("Filter min r: " + filter_min_r);
+print("Filter max shift (px): " + filter_max_shift);
 
 // Step 1: Calculate pairwise shifts
 print("Step 1: Calculating pairwise shifts...");
@@ -37,7 +39,9 @@ print("Step 2: Filtering pairwise shifts...");
 run("Filter pairwise shifts ...", "select=[" + xml_file + "] " +
 		"filter_by_link_quality " +
 		"min_r=" + filter_min_r + " " +
-		"max_r=1");
+		"max_r=1 " +
+		"filter_by_total_shift_magnitude " +
+		"max_displacement=" + filter_max_shift);
 
 print("Step 3: Optimizing globally and applying shifts...");
 run("Optimize globally and apply shifts ...",

@@ -259,6 +259,7 @@ With `--brain_id`, the paths are built like this (see [DATA_LAYOUT.md](DATA_LAYO
 | Setting | Default | Meaning |
 |---|---|---|
 | `channel_alignment.filter_min_r` | `0.7` | Minimum correlation to keep a channel shift |
+| `channel_alignment.filter_max_shift` | `50` | Maximum total channel shift (px) to keep; larger links are dropped and the channel falls back to stage metadata |
 | `tile_alignment.use_channel` | `0` | Channel used to align tiles |
 | `tile_alignment.filter_min_r` | `0.7` | Minimum correlation to keep a tile shift |
 | `icp_refinement.*` | Simple, 8/8/4, <5 px | ICP refinement options |
