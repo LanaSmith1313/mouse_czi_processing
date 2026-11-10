@@ -55,7 +55,7 @@ process organizeChannelsForBrainreg {
     path brainreg_env
 
     output:
-    tuple path("primary"), path("additional_channels.txt"), val(base_name), env(PRIMARY_BASENAME), emit: organized_channels
+    tuple path("primary"), path("additional_channels.txt"), val(base_name), env('PRIMARY_BASENAME'), emit: organized_channels
 
     script:
     """

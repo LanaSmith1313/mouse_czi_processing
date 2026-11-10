@@ -3,7 +3,7 @@ process makeCziDatasetForBigstitcher {
     
     input:
     path image
-    env FIJI_PATH
+    env 'FIJI_PATH'
     
     output:
     path "${image.baseName}_bigstitcher.xml", emit: xml_file
@@ -29,7 +29,7 @@ process alignChannelsWithBigstitcher {
     
     input:
     path xml_file
-    env FIJI_PATH
+    env 'FIJI_PATH'
     val config
     
     output:
@@ -73,7 +73,7 @@ process alignTilesWithBigstitcher {
    
     input:
     path xml_file
-    env FIJI_PATH
+    env 'FIJI_PATH'
     val config
    
     output:
@@ -117,7 +117,7 @@ process icpRefinementWithBigstitcher {
     
     input:
     path xml_file
-    env FIJI_PATH
+    env 'FIJI_PATH'
     val config
     
     output:
@@ -155,7 +155,7 @@ process reorientToASRWithBigstitcher {
     
     input:
     path xml_file
-    env FIJI_PATH
+    env 'FIJI_PATH'
     val config
     
     output:
@@ -189,7 +189,7 @@ process fuseBigStitcherDataset {
     tag "fuse dataset ${xml_file.baseName}"
     input:
     path xml_file
-    env FIJI_PATH
+    env 'FIJI_PATH'
     val config
     val ds_x
     val ds_y
@@ -244,11 +244,11 @@ process getVoxelSizes {
     
     input:
     path image_file
-    env FIJI_PATH
+    env 'FIJI_PATH'
     
     output:
     path "voxel_sizes.txt", emit: voxel_file
-    tuple val("${image_file.baseName}"), env(VOXEL_X), env(VOXEL_Y), env(VOXEL_Z), emit: voxel_sizes
+    tuple val("${image_file.baseName}"), env('VOXEL_X'), env('VOXEL_Y'), env('VOXEL_Z'), emit: voxel_sizes
     
     script:
     // Calculate 80% of allocated memory for Fiji (leave some for system overhead)
