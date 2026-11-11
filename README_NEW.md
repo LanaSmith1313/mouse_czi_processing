@@ -120,8 +120,10 @@ chmod +x nextflow
 # Make sure ~/.local/bin is on your PATH (add this line to ~/.bashrc)
 export PATH="$HOME/.local/bin:$PATH"
 
-nextflow -version
+nextflow -version          # must be 26.04 or newer
 ```
+
+The pipeline uses the Nextflow strict syntax and needs **Nextflow ≥ 26.04** (`manifest.nextflowVersion` enforces this). To upgrade an older install, run `nextflow self-update`.
 
 The full instructions are in the [Nextflow docs](https://www.nextflow.io/docs/latest/install.html#self-install).
 
@@ -158,7 +160,7 @@ You can also leave the file unchanged and pass these on the command line each ti
 
 ### 3.5 Check the shared cache folders
 
-Under `-profile slurm`, caches go to `/work/<group>/`. `<group>` is your primary Unix group with the `-unit` suffix removed (`lsens-unit` → `lsens`):
+Under `-profile slurm`, caches go to `/work/<group>/`. `<group>` is set by `params.affiliation` in `nextflow.config` (default `lsens`):
 
 ```
 /work/<group>/
@@ -171,14 +173,13 @@ Under `-profile slurm`, caches go to `/work/<group>/`. `<group>` is your primary
 └── <First_Last>/                # your OME-Zarr + Spotiflow results
 ```
 
-Check that the group name resolves and the folder is writable:
+Check that the folder exists and is writable:
 
 ```bash
-id -gn                     # e.g. lsens-unit
 ls -ld /work/lsens         # must exist and be writable by you
 ```
 
-If `id -gn` does not give the right group, replace the `${['id', '-gn'].execute()...}` expressions in the `slurm` profile of `nextflow.config` with your group name.
+If you are in a different group, change `affiliation` in `nextflow.config` or pass `--affiliation <group>` on the command line.
 
 The Nextflow work directory is `/scratch/$USER/nf`. Scratch is **not backed up** and old files are purged automatically.
 
@@ -375,7 +376,7 @@ nextflow run main.nf -profile slurm --brain_id MS181 --user_name First_Last --dr
 nextflow run main.nf -resume -profile slurm --brain_id MS181 --user_name First_Last --check_voxels
 
 # OME-Zarr only: convert already-published fused ch1 TIFFs (no stitching, fusion or registration)
-nextflow run main.nf -entry omeZarrOnly -profile slurm --brain_id MS190,MS191 --user_name First_Last
+nextflow run main.nf --ome_zarr_only -profile slurm --brain_id MS190,MS191 --user_name First_Last
 
 # Explicit SSH input instead of --brain_id
 nextflow run main.nf -resume -profile slurm \
@@ -687,7 +688,7 @@ docker.enabled    = true
 
 ```
 mouse_czi_processing/
-├── main.nf                 # Main workflow (+ omeZarrOnly entry point, run summary)
+├── main.nf                 # Main workflow (+ omeZarrOnly mode via --ome_zarr_only, run summary)
 ├── nextflow.config         # Parameters, profiles, Slurm resources
 ├── modules/
 │   ├── fiji.nf             # Fiji install / cache

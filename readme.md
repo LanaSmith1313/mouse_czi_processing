@@ -105,7 +105,7 @@ To nest the brain folders in a project folder on the NAS, add `--analysis_subfol
 nextflow run main.nf -resume -profile slurm --brain_id MS214 --user_name Lana_Smith --analysis_subfolder cre_anatomy -with-trace
 ```
 
-This applies to everything published to the NAS (XMLs, `ch0/`, `ch1/`, `registration/`, `detection/`) and to where `-entry omeZarrOnly` reads `ch1/` from. Paths on `/work` (OME-Zarr, `detection_results/`) are not affected.
+This applies to everything published to the NAS (XMLs, `ch0/`, `ch1/`, `registration/`, `detection/`) and to where `--ome_zarr_only` reads `ch1/` from. Paths on `/work` (OME-Zarr, `detection_results/`) are not affected.
 
 ### Pipeline steps and skip flags
 

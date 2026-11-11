@@ -30,7 +30,7 @@ process regQcEnvInstall {
 process selectBestRegistration {
     container 'python:3.11'
     tag "select registration ${key}"
-    publishDir path: "${params.ome_zarr_output_base}/${params.user_name}/${key}",
+    publishDir path: { "${params.ome_zarr_output_base}/${params.user_name}/${key}" },
                mode: 'copy', enabled: params.user_name != null
 
     input:
@@ -39,7 +39,7 @@ process selectBestRegistration {
     tuple val(key), val(variant_names), path(variant_dirs, stageAs: 'variant_??')
 
     output:
-    tuple val(key), env(SELECTED), path("registration_qc/evaluation.json"), emit: selected
+    tuple val(key), env('SELECTED'), path("registration_qc/evaluation.json"), emit: selected
     tuple val(key), path("registration_qc"), emit: qc
 
     script:
@@ -75,7 +75,7 @@ process selectBestRegistration {
 process transformPointsToAtlas {
     container 'python:3.11'
     tag "points to atlas ${key}"
-    publishDir path: "${det_dir}", mode: 'copy', saveAs: { fn -> fn.tokenize('/')[-1] }
+    publishDir path: { "${det_dir}" }, mode: 'copy', saveAs: { fn -> fn.tokenize('/')[-1] }
 
     input:
     path brainreg_env

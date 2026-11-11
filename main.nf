@@ -52,12 +52,12 @@ def variantName(key, combo) {
 
 // Map orientation letter to anatomical axis pair
 def letterToAxis(letter) {
-    switch(letter.toUpperCase()) {
-        case 'A': case 'P': return 'AP'
-        case 'S': case 'I': return 'SI'
-        case 'R': case 'L': return 'RL'
-        default: throw new IllegalArgumentException("Unknown orientation letter: ${letter}")
+    def axisMap = ['A': 'AP', 'P': 'AP', 'S': 'SI', 'I': 'SI', 'R': 'RL', 'L': 'RL']
+    def axis = axisMap[letter.toUpperCase()]
+    if (axis == null) {
+        throw new IllegalArgumentException("Unknown orientation letter: ${letter}")
     }
+    return axis
 }
 
 // Permute voxel sizes from any orientation to ASR
@@ -86,6 +86,13 @@ def permuteVoxelsToASR(String orientation, double vx, double vy, double vz) {
 }
 
 workflow {
+    main:
+
+    // OME-Zarr-only mode (replaces `-entry omeZarrOnly`, which Nextflow >= 26
+    // no longer supports): convert already-fused ch1 TIFFs and do nothing else.
+    if (params.ome_zarr_only) {
+        omeZarrOnly()
+    }
 
     // Resolve input: construct SSH paths from brain_id, or use --input directly
     def resolved_input = params.input
@@ -103,8 +110,8 @@ workflow {
         log.warn "WARNING: --user_name not set. Output publishing to analysis directory will be disabled."
     }
 
-    // Dry run: print resolved paths and exit
-    if (params.dry_run) {
+    // Dry run: print resolved paths and do nothing else
+    if (params.dry_run && !params.ome_zarr_only) {
         log.info "========================================="
         log.info "  DRY RUN - No processing will be done"
         log.info "========================================="
@@ -142,78 +149,87 @@ workflow {
         }
         log.info ""
         log.info "========================================="
-        return
     }
 
-    // Check if Fiji already exists, otherwise set it up
-    if (file("${params.fiji_cache_dir}/fiji_installation").exists()) {
-        fiji_path = Channel.value("${params.fiji_cache_dir}/fiji_installation")
-        log.info "Using cached Fiji installation at: ${params.fiji_cache_dir}/fiji_installation"
-    } else {
-        log.info "Setting up new Fiji installation..."
-        fiji_path = setupFiji()
-    }
+    // Strict syntax (Nextflow >= 26) forbids `return` in a workflow body, so the
+    // early exits (dry run, check voxels, skip flags) are expressed as guards.
+    def do_setup = !params.dry_run && !params.ome_zarr_only
+    def do_pipeline = do_setup && !params.check_voxels
+    def do_registration = do_pipeline && !params.skip_registration
+    def do_selection = do_registration && !params.skip_registration_selection
+    def do_points = do_selection && !params.skip_points_to_atlas && params.user_name
+
+    if (do_setup) {
+        // Check if Fiji already exists, otherwise set it up
+        if (file("${params.fiji_cache_dir}/fiji_installation").exists()) {
+            fiji_path = Channel.value("${params.fiji_cache_dir}/fiji_installation")
+            log.info "Using cached Fiji installation at: ${params.fiji_cache_dir}/fiji_installation"
+        } else {
+            log.info "Setting up new Fiji installation..."
+            fiji_path = setupFiji()
+        }
     
-    // Handle input files - properly split comma-separated input
-    if (resolved_input) {
-        // Split by comma, trim whitespace, and create channel
-        input_files = resolved_input.split(',').collect { it.trim() }
-        //images = Channel.fromList(input_files).map { file(it) }
+        // Handle input files - properly split comma-separated input
+        if (resolved_input) {
+            // Split by comma, trim whitespace, and create channel
+            input_files = resolved_input.split(',').collect { it.trim() }
+            //images = Channel.fromList(input_files).map { file(it) }
 
-        // Separate SSH paths from local paths
-        images = Channel.fromList(input_files).map { path_str ->
-            if (PathUtils.isSshPath(path_str)) {
-                // This is an SSH path - don't try to convert to file object
-                return path_str
-            } else {
-                // This is a local path
-                return file(path_str, checkIfExists: true)
+            // Separate SSH paths from local paths
+            images = Channel.fromList(input_files).map { path_str ->
+                if (PathUtils.isSshPath(path_str)) {
+                    // This is an SSH path - don't try to convert to file object
+                    return path_str
+                } else {
+                    // This is a local path
+                    return file(path_str, checkIfExists: true)
+                }
             }
-        }
 
-        // Publishing steps rsync to the source/analysis tree over SSH, so they
-        // only work for SSH inputs; local inputs are processed but not published
-        if (input_files.any { !PathUtils.isSshPath(it) }) {
-            log.warn "WARNING: local --input paths are processed but not published (publishing needs user@host:/path inputs)."
-        }
+            // Publishing steps rsync to the source/analysis tree over SSH, so they
+            // only work for SSH inputs; local inputs are processed but not published
+            if (input_files.any { !PathUtils.isSshPath(it) }) {
+                log.warn "WARNING: local --input paths are processed but not published (publishing needs user@host:/path inputs)."
+            }
 
-        // Check for duplicate basenames - unique key is required!
-        def basenames = input_files.collect {
-            def basename = PathUtils.extractBasename(it)
-            return basename
-        }
+            // Check for duplicate basenames - unique key is required!
+            def basenames = input_files.collect {
+                def basename = PathUtils.extractBasename(it)
+                return basename
+            }
 
-        def duplicates = basenames.countBy { it }.findAll { name, n -> n > 1 }.keySet()
-        if (duplicates) {
-            throw new IllegalArgumentException(
-                "Duplicate basenames found in input files: ${duplicates.join(', ')}. " +
-                "All input files must have unique basenames."
-            )
-        }
+            def duplicates = basenames.countBy { it }.findAll { name, n -> n > 1 }.keySet()
+            if (duplicates) {
+                throw new IllegalArgumentException(
+                    "Duplicate basenames found in input files: ${duplicates.join(', ')}. " +
+                    "All input files must have unique basenames."
+                )
+            }
 
-        // Debug: show what files were found BEFORE processing
-        images.view { "Found input file: $it" }
-    } else {
-        log.info "WARNING: no input file defined - running the pipeline will only install tools without using them"
-        images = Channel.empty()
-    }
+            // Debug: show what files were found BEFORE processing
+            images.view { "Found input file: $it" }
+        } else {
+            log.info "WARNING: no input file defined - running the pipeline will only install tools without using them"
+            images = Channel.empty()
+        }
     
-    // Conditionally stage files based on profile or parameter
-    def shouldStageFiles = workflow.profile.contains('slurm')
+        // Conditionally stage files based on profile or parameter
+        def shouldStageFiles = workflow.profile.contains('slurm')
     
-    if (shouldStageFiles) {
-        log.info "File staging enabled (profile: ${workflow.profile})"
-        // Only SSH inputs need copying to scratch; local files are used in place
-        def ssh_images = images.filter { it instanceof String }
-        def local_images = images.filter { !(it instanceof String) }
-        staged_files = stageFilesRSyncSSH(ssh_images).mix(local_images)
-    } else {
-        log.info "File staging disabled - using files directly"
-        staged_files = images
+        if (shouldStageFiles) {
+            log.info "File staging enabled (profile: ${workflow.profile})"
+            // Only SSH inputs need copying to scratch; local files are used in place
+            def ssh_images = images.filter { it instanceof String }
+            def local_images = images.filter { !(it instanceof String) }
+            staged_files = stageFilesRSyncSSH(ssh_images).mix(local_images)
+        } else {
+            log.info "File staging disabled - using files directly"
+            staged_files = images
+        }
     }
     
     // Check voxels mode: extract original voxel sizes from CZI and show fusion preview
-    if (params.check_voxels) {
+    if (do_setup && params.check_voxels) {
         log.info "========================================="
         log.info "  CHECK VOXELS - Voxel size analysis"
         log.info "========================================="
@@ -225,7 +241,9 @@ workflow {
             def reorient = params.bigstitcher.reorientation
 
             // Permute voxels if ASR reorientation is enabled
-            def eff_vx = vx, eff_vy = vy, eff_vz = vz
+            def eff_vx = vx
+            def eff_vy = vy
+            def eff_vz = vz
             if (reorient.reorient_to_asr) {
                 def permuted = permuteVoxelsToASR(reorient.raw_orientation, vx, vy, vz)
                 eff_vx = permuted[0]; eff_vy = permuted[1]; eff_vz = permuted[2]
@@ -253,312 +271,314 @@ workflow {
             lines << "  Fused voxel sizes:           X=${String.format('%.1f', fused_x)}μm, Y=${String.format('%.1f', fused_y)}μm, Z=${String.format('%.1f', fused_z)}μm"
             lines.join('\n')
         }
-        return
     }
 
-    // Extract original voxel sizes from CZI (runs in parallel with makeCziDatasetForBigstitcher)
-    getOriginalVoxelSizes(staged_files, fiji_path)
-    def ds = (params.bigstitcher.fusion_config.downsample ?: 1) as double
-    original_voxel_sizes = getOriginalVoxelSizes.out.voxel_sizes
-        .map { name, x, y, z ->
-            def key = PathUtils.getBaseKey(name)
-            log.info "Voxel sizes for ${name}: X=${x}μm, Y=${y}μm, Z=${z}μm → uniform downsample=${ds}"
-            tuple(key, ds, ds, ds)
-        }
-
-    // Makes a bigstitcher xml compatible file from the czi file
-    makeCziDatasetForBigstitcher(staged_files, fiji_path)
-
-    // Add keys to both channels for joining
-    xml_with_keys = makeCziDatasetForBigstitcher.out
-        .map { xml_file ->
-            def key = PathUtils.getBaseKey(xml_file.toString())
-            tuple(key, xml_file)
-        }
-
-    images_with_keys = images
-        .map { original_path ->
-            def key = PathUtils.getBaseKey(original_path.toString())
-            def output_path = params.user_name
-                ? "${params.ssh_host}:${brainOutputDir(key)}"
-                : null
-            tuple(key, original_path, output_path)
-        }
-
-    // Only SSH inputs can be published (see warning above)
-    publishable_images = images_with_keys
-        .filter { PathUtils.isSshPath(it[1].toString()) }  // it = [key, original_path, output_path]
-
-    // Join by key (inner join - only matching items)
-    xml_not_stitched_with_original_paths = xml_with_keys
-        .join(publishable_images)
-        .map { key, xml_file, original_path, output_path ->
-            tuple(xml_file, original_path, output_path)
-        }
-
-    // Debug: Show the pairing
-    xml_not_stitched_with_original_paths.view { xml_file, original_path, output_path ->
-        "Will publish ${xml_file.name} to ${output_path ?: 'alongside ' + original_path}"
-    }
-
-    // Publish XML files to output locations
-    if (!params.skip_results_transfer) {
-        publishInitialXmlToSource(xml_not_stitched_with_original_paths)
-    }
-
-    // Channel alignment
-    channel_aligned = alignChannelsWithBigstitcher(makeCziDatasetForBigstitcher.out, fiji_path, params.bigstitcher)
-
-    // Tile alignment 
-    tile_aligned = alignTilesWithBigstitcher(channel_aligned.aligned_xml, fiji_path, params.bigstitcher)
-
-    // ICP refinement
-    icp_refined = icpRefinementWithBigstitcher(tile_aligned.tile_aligned_xml, fiji_path, params.bigstitcher)
-
-    def xml_out
-
-    // Optional ASR Reorientation
-    if (params.bigstitcher.reorientation.reorient_to_asr) {
-        reoriented_to_asr = reorientToASRWithBigstitcher(icp_refined.icp_refined_xml, fiji_path, params.bigstitcher)
-        xml_out = reoriented_to_asr.asr_xml
-    } else {
-        xml_out = icp_refined.icp_refined_xml
-    }
-
-    // Pair XML files with their original input paths for publishing
-    xml_out_with_keys = xml_out
-        .map { xml_file ->
-            def key = PathUtils.getBaseKey(xml_file.toString())
-            tuple(key, xml_file)
-        }
-
-    // Reuse publishable_images from earlier (channels can be consumed multiple times)
-    xml_with_original_paths = xml_out_with_keys
-        .join(publishable_images)
-        .map { key, xml_file, original_path, output_path ->
-            tuple(xml_file, original_path, output_path)
-        }
-
-    // Debug: Show the pairing
-    xml_with_original_paths.view { xml_file, original_path, output_path ->
-        "Will publish final xml file ${xml_file.name} to ${output_path ?: 'alongside ' + original_path}"
-    }
-
-    // Publish XML files to output locations
-    if (!params.skip_results_transfer) {
-        publishStitchedXmlToSource(xml_with_original_paths)
-    }
-
-    // Join XML with per-axis downsample factors for fusion
-    xml_out_with_ds = xml_out
-        .map { xml_file ->
-            def key = PathUtils.getBaseKey(xml_file.toString())
-            tuple(key, xml_file)
-        }
-        .join(original_voxel_sizes)
-        .map { key, xml_file, ds_x, ds_y, ds_z ->
-            tuple(xml_file, ds_x, ds_y, ds_z)
-        }
-
-    // Fuse image - always splits by channel, with per-axis downsampling
-    fused_images = fuseBigStitcherDataset(
-        xml_out_with_ds.map { it[0] },
-        fiji_path,
-        params.bigstitcher,
-        xml_out_with_ds.map { it[1] },
-        xml_out_with_ds.map { it[2] },
-        xml_out_with_ds.map { it[3] }
-    )
-
-    // Publish fused channel TIFFs to analysis output (ch0/, ch1/, etc.)
-    if (params.user_name && !params.skip_results_transfer) {
-        fused_with_keys = fused_images.named_fused_images
-            .map { base_name, channel_files ->
-                def key = PathUtils.getBaseKey(base_name)
-                tuple(key, base_name, channel_files)
+    if (do_pipeline) {
+        // Extract original voxel sizes from CZI (runs in parallel with makeCziDatasetForBigstitcher)
+        getOriginalVoxelSizes(staged_files, fiji_path)
+        def ds = (params.bigstitcher.fusion_config.downsample ?: 1) as double
+        original_voxel_sizes = getOriginalVoxelSizes.out.voxel_sizes
+            .map { name, x, y, z ->
+                def key = PathUtils.getBaseKey(name)
+                log.info "Voxel sizes for ${name}: X=${x}μm, Y=${y}μm, Z=${z}μm → uniform downsample=${ds}"
+                tuple(key, ds, ds, ds)
             }
 
-        fused_with_output = fused_with_keys
+        // Makes a bigstitcher xml compatible file from the czi file
+        makeCziDatasetForBigstitcher(staged_files, fiji_path)
+
+        // Add keys to both channels for joining
+        xml_with_keys = makeCziDatasetForBigstitcher.out
+            .map { xml_file ->
+                def key = PathUtils.getBaseKey(xml_file.toString())
+                tuple(key, xml_file)
+            }
+
+        images_with_keys = images
+            .map { original_path ->
+                def key = PathUtils.getBaseKey(original_path.toString())
+                def output_path = params.user_name
+                    ? "${params.ssh_host}:${brainOutputDir(key)}"
+                    : null
+                tuple(key, original_path, output_path)
+            }
+
+        // Only SSH inputs can be published (see warning above)
+        publishable_images = images_with_keys
+            .filter { PathUtils.isSshPath(it[1].toString()) }  // it = [key, original_path, output_path]
+
+        // Join by key (inner join - only matching items)
+        xml_not_stitched_with_original_paths = xml_with_keys
             .join(publishable_images)
-            .map { key, base_name, channel_files, original_path, output_path ->
-                tuple(base_name, channel_files, output_path)
+            .map { key, xml_file, original_path, output_path ->
+                tuple(xml_file, original_path, output_path)
             }
 
-        publishFusedChannelsToSource(fused_with_output)
-    }
+        // Debug: Show the pairing
+        xml_not_stitched_with_original_paths.view { xml_file, original_path, output_path ->
+            "Will publish ${xml_file.name} to ${output_path ?: 'alongside ' + original_path}"
+        }
 
-    // Convert ch1 fused TIFF to OME-Zarr on local cluster storage
-    if (!params.skip_ome_zarr && params.user_name) {
-        // Extract ch1 file from fused images and pair with brain key
-        ch1_for_zarr = fused_images.named_fused_images
-            .map { base_name, channel_files ->
-                def file_list = channel_files instanceof List ? new ArrayList(channel_files) : [channel_files]
-                def ch1 = file_list.find { it.name.contains('_C1') }
-                def key = PathUtils.getBaseKey(base_name)
-                return ch1 ? tuple(key, ch1) : null
-            }
-            .filter { it != null }
-            .map { key, ch1_tiff ->
-                def zarr_path = "${params.ome_zarr_output_base}/${params.user_name}/${key}/ch1.ome.zarr"
-                tuple(key, ch1_tiff, zarr_path)
-            }
+        // Publish XML files to output locations
+        if (!params.skip_results_transfer) {
+            publishInitialXmlToSource(xml_not_stitched_with_original_paths)
+        }
 
-        ome_zarr_env = omeZarrEnvInstall()
-        convertTiffToOmeZarr(ome_zarr_env, ch1_for_zarr)
-        publishOmeZarr(convertTiffToOmeZarr.out.zarr_result)
-    }
+        // Channel alignment
+        channel_aligned = alignChannelsWithBigstitcher(makeCziDatasetForBigstitcher.out, fiji_path, params.bigstitcher)
 
-    // Spotiflow spot detection on Kuma (GPU). Normally runs on the OME-Zarr just
-    // published by the branch above. When OME-Zarr conversion is skipped
-    // (--skip_ome_zarr), it instead runs on the existing zarr already on /work —
-    // letting you re-run spotiflow without re-converting.
-    if (!params.skip_spotiflow && params.user_name) {
-        def spotiflow_zarrs
-        if (!params.skip_ome_zarr) {
-            spotiflow_zarrs = publishOmeZarr.out.published
+        // Tile alignment 
+        tile_aligned = alignTilesWithBigstitcher(channel_aligned.aligned_xml, fiji_path, params.bigstitcher)
+
+        // ICP refinement
+        icp_refined = icpRefinementWithBigstitcher(tile_aligned.tile_aligned_xml, fiji_path, params.bigstitcher)
+
+        def xml_out
+
+        // Optional ASR Reorientation
+        if (params.bigstitcher.reorientation.reorient_to_asr) {
+            reoriented_to_asr = reorientToASRWithBigstitcher(icp_refined.icp_refined_xml, fiji_path, params.bigstitcher)
+            xml_out = reoriented_to_asr.asr_xml
         } else {
-            spotiflow_zarrs = Channel
-                .fromList(params.brain_id ? params.brain_id.split(',').collect { it.trim() } : [])
-                .map { key -> tuple(key, "${params.ome_zarr_output_base}/${params.user_name}/${key}/ch1.ome.zarr") }
+            xml_out = icp_refined.icp_refined_xml
         }
-        spotiflow_input = spotiflow_zarrs.map { key, zarr ->
-            def out_dir = "${params.ome_zarr_output_base}/${params.user_name}/detection_results/${params.spotiflow_version}/${key}"
-            tuple(key, zarr, out_dir)
+
+        // Pair XML files with their original input paths for publishing
+        xml_out_with_keys = xml_out
+            .map { xml_file ->
+                def key = PathUtils.getBaseKey(xml_file.toString())
+                tuple(key, xml_file)
+            }
+
+        // Reuse publishable_images from earlier (channels can be consumed multiple times)
+        xml_with_original_paths = xml_out_with_keys
+            .join(publishable_images)
+            .map { key, xml_file, original_path, output_path ->
+                tuple(xml_file, original_path, output_path)
+            }
+
+        // Debug: Show the pairing
+        xml_with_original_paths.view { xml_file, original_path, output_path ->
+            "Will publish final xml file ${xml_file.name} to ${output_path ?: 'alongside ' + original_path}"
         }
-        spotiflowDetectKuma(spotiflow_input)
+
+        // Publish XML files to output locations
+        if (!params.skip_results_transfer) {
+            publishStitchedXmlToSource(xml_with_original_paths)
+        }
+
+        // Join XML with per-axis downsample factors for fusion
+        xml_out_with_ds = xml_out
+            .map { xml_file ->
+                def key = PathUtils.getBaseKey(xml_file.toString())
+                tuple(key, xml_file)
+            }
+            .join(original_voxel_sizes)
+            .map { key, xml_file, ds_x, ds_y, ds_z ->
+                tuple(xml_file, ds_x, ds_y, ds_z)
+            }
+
+        // Fuse image - always splits by channel, with per-axis downsampling
+        fused_images = fuseBigStitcherDataset(
+            xml_out_with_ds.map { it[0] },
+            fiji_path,
+            params.bigstitcher,
+            xml_out_with_ds.map { it[1] },
+            xml_out_with_ds.map { it[2] },
+            xml_out_with_ds.map { it[3] }
+        )
+
+        // Publish fused channel TIFFs to analysis output (ch0/, ch1/, etc.)
+        if (params.user_name && !params.skip_results_transfer) {
+            fused_with_keys = fused_images.named_fused_images
+                .map { base_name, channel_files ->
+                    def key = PathUtils.getBaseKey(base_name)
+                    tuple(key, base_name, channel_files)
+                }
+
+            fused_with_output = fused_with_keys
+                .join(publishable_images)
+                .map { key, base_name, channel_files, original_path, output_path ->
+                    tuple(base_name, channel_files, output_path)
+                }
+
+            publishFusedChannelsToSource(fused_with_output)
+        }
+
+        // Convert ch1 fused TIFF to OME-Zarr on local cluster storage
+        if (!params.skip_ome_zarr && params.user_name) {
+            // Extract ch1 file from fused images and pair with brain key
+            ch1_for_zarr = fused_images.named_fused_images
+                .map { base_name, channel_files ->
+                    def file_list = channel_files instanceof List ? new ArrayList(channel_files) : [channel_files]
+                    def ch1 = file_list.find { it.name.contains('_C1') }
+                    def key = PathUtils.getBaseKey(base_name)
+                    return ch1 ? tuple(key, ch1) : null
+                }
+                .filter { it != null }
+                .map { key, ch1_tiff ->
+                    def zarr_path = "${params.ome_zarr_output_base}/${params.user_name}/${key}/ch1.ome.zarr"
+                    tuple(key, ch1_tiff, zarr_path)
+                }
+
+            ome_zarr_env = omeZarrEnvInstall()
+            convertTiffToOmeZarr(ome_zarr_env, ch1_for_zarr)
+            publishOmeZarr(convertTiffToOmeZarr.out.zarr_result)
+        }
+
+        // Spotiflow spot detection on Kuma (GPU). Normally runs on the OME-Zarr just
+        // published by the branch above. When OME-Zarr conversion is skipped
+        // (--skip_ome_zarr), it instead runs on the existing zarr already on /work —
+        // letting you re-run spotiflow without re-converting.
+        if (!params.skip_spotiflow && params.user_name) {
+            def spotiflow_zarrs
+            if (!params.skip_ome_zarr) {
+                spotiflow_zarrs = publishOmeZarr.out.published
+            } else {
+                spotiflow_zarrs = Channel
+                    .fromList(params.brain_id ? params.brain_id.split(',').collect { it.trim() } : [])
+                    .map { key -> tuple(key, "${params.ome_zarr_output_base}/${params.user_name}/${key}/ch1.ome.zarr") }
+            }
+            spotiflow_input = spotiflow_zarrs.map { key, zarr ->
+                def out_dir = "${params.ome_zarr_output_base}/${params.user_name}/detection_results/${params.spotiflow_version}/${key}"
+                tuple(key, zarr, out_dir)
+            }
+            spotiflowDetectKuma(spotiflow_input)
+        }
     }
 
-    // Stop here if registration is skipped
-    if (params.skip_registration) {
+    // Registration is skipped: stop after fusion
+    if (do_pipeline && params.skip_registration) {
         log.info "========================================="
         log.info "  SKIP REGISTRATION - stopping after fusion"
         log.info "========================================="
-        return
     }
 
-    // Process each image completely through the brainreg preparation pipeline
-    image_processing = fused_images.named_fused_images
-        .map { base_name, channel_files ->
-            // Get first channel for voxel size detection
-            def file_list = channel_files instanceof List ? channel_files : [channel_files]
-            def sorted_files = file_list.sort { it.name }
-            def first_channel = sorted_files[0]
+    if (do_registration) {
+        // Process each image completely through the brainreg preparation pipeline
+        image_processing = fused_images.named_fused_images
+            .map { base_name, channel_files ->
+                // Get first channel for voxel size detection
+                def file_list = channel_files instanceof List ? channel_files : [channel_files]
+                def sorted_files = file_list.sort { it.name }
+                def first_channel = sorted_files[0]
             
-            // Return tuple with all info needed for this image
-            return tuple(base_name, channel_files, first_channel)
+                // Return tuple with all info needed for this image
+                return tuple(base_name, channel_files, first_channel)
+            }
+    
+        // Debug: Show what we're processing
+        image_processing.view { base_name, channel_files, first_channel ->
+            "Processing image: ${base_name} with ${channel_files.size()} channels, using ${first_channel.name} for voxel sizes"
         }
     
-    // Debug: Show what we're processing
-    image_processing.view { base_name, channel_files, first_channel ->
-        "Processing image: ${base_name} with ${channel_files.size()} channels, using ${first_channel.name} for voxel sizes"
-    }
+        // Get voxel sizes for each image
+        voxel_results = getVoxelSizes(
+            image_processing.map { base_name, channel_files, first_channel -> first_channel },
+            fiji_path
+        )
+
+        // brainreg env is needed by organizeChannelsForBrainreg (uses tifffile to
+        // pre-split each channel into a directory of 2D slices, which lets brainreg
+        // dispatch to its parallel slice-wise loader).
+        brainreg_install = brainregEnvInstall()
+        atlas_cache = downloadAtlas(brainreg_install, params.brainreg.atlas)
+
+        // Organize channels for brainreg for each image
+        organized_channels = organizeChannelsForBrainreg(
+            image_processing.map { base_name, channel_files, first_channel -> tuple(base_name, channel_files) },
+            params.brainreg.channel_used_for_registration,
+            brainreg_install
+        )
+
+        // Combine everything for brainreg input using explicit key-based join
+        organized_with_keys = organized_channels.organized_channels
+            .map { primary, additional, base_name, primary_basename ->
+                def key = PathUtils.getBaseKey(base_name)
+                tuple(key, primary, additional, base_name, primary_basename)
+            }
+
+        voxel_with_keys = voxel_results.voxel_sizes
+            .map { voxel_name, x, y, z ->
+                def key = PathUtils.getBaseKey(voxel_name)
+                tuple(key, x, y, z)
+            }
+
+        brainreg_input = organized_with_keys
+            .join(voxel_with_keys)
+            .map { key, primary, additional, base_name, primary_basename, x, y, z ->
+                tuple(primary, additional, base_name, primary_basename, x, y, z)
+            }
     
-    // Get voxel sizes for each image
-    voxel_results = getVoxelSizes(
-        image_processing.map { base_name, channel_files, first_channel -> first_channel },
-        fiji_path
-    )
-
-    // brainreg env is needed by organizeChannelsForBrainreg (uses tifffile to
-    // pre-split each channel into a directory of 2D slices, which lets brainreg
-    // dispatch to its parallel slice-wise loader).
-    brainreg_install = brainregEnvInstall()
-    atlas_cache = downloadAtlas(brainreg_install, params.brainreg.atlas)
-
-    // Organize channels for brainreg for each image
-    organized_channels = organizeChannelsForBrainreg(
-        image_processing.map { base_name, channel_files, first_channel -> tuple(base_name, channel_files) },
-        params.brainreg.channel_used_for_registration,
-        brainreg_install
-    )
-
-    // Combine everything for brainreg input using explicit key-based join
-    organized_with_keys = organized_channels.organized_channels
-        .map { primary, additional, base_name, primary_basename ->
-            def key = PathUtils.getBaseKey(base_name)
-            tuple(key, primary, additional, base_name, primary_basename)
+        // Debug: View what will be processed
+        brainreg_input.view { primary, additional, name, primary_basename, x, y, z ->
+            "Ready for brainreg: ${name} (primary=${primary_basename}) with voxel sizes: X=${x}μm, Y=${y}μm, Z=${z}μm"
         }
 
-    voxel_with_keys = voxel_results.voxel_sizes
-        .map { voxel_name, x, y, z ->
-            def key = PathUtils.getBaseKey(voxel_name)
-            tuple(key, x, y, z)
-        }
+        // CREATE PARAMETER SWEEP COMBINATIONS using Nextflow channels
+        bending_energy_ch = Channel.fromList(ensureList(params.brainreg.bending_energy_weight))
+        grid_spacing_ch = Channel.fromList(ensureList(params.brainreg.grid_spacing))
+        smoothing_sigma_ch = Channel.fromList(ensureList(params.brainreg.smoothing_sigma_floating))
+    
+        // Combine all parameter channels to create all combinations NOTE: it's a nextflow channel, not an image channel!
+        param_combinations = bending_energy_ch
+            .combine(grid_spacing_ch)
+            .combine(smoothing_sigma_ch)
+            .map { bending, grid, sigma ->
+                [
+                    // atlas isn't swept (still a single value from config), but it's
+                    // included here so it flows into copyResultsToImageFolder's
+                    // paramsString -- otherwise two runs that only differ by atlas
+                    // would publish to the same folder name and silently overwrite
+                    // each other's results.
+                    atlas: params.brainreg.atlas,
+                    bending_energy_weight: bending,
+                    grid_spacing: grid,
+                    smoothing_sigma_floating: sigma
+                ]
+            }
 
-    brainreg_input = organized_with_keys
-        .join(voxel_with_keys)
-        .map { key, primary, additional, base_name, primary_basename, x, y, z ->
-            tuple(primary, additional, base_name, primary_basename, x, y, z)
+        // Log the parameter combinations that will be tested
+        param_combinations.view { combo ->
+            "Parameter combination: atlas=${combo.atlas}, bending_energy_weight=${combo.bending_energy_weight}, grid_spacing=${combo.grid_spacing}, smoothing_sigma_floating=${combo.smoothing_sigma_floating}"
         }
     
-    // Debug: View what will be processed
-    brainreg_input.view { primary, additional, name, primary_basename, x, y, z ->
-        "Ready for brainreg: ${name} (primary=${primary_basename}) with voxel sizes: X=${x}μm, Y=${y}μm, Z=${z}μm"
-    }
+        // Cross brainreg input with parameter combinations
+        brainreg_sweep_input = brainreg_input.combine(param_combinations)
 
-    // CREATE PARAMETER SWEEP COMBINATIONS using Nextflow channels
-    bending_energy_ch = Channel.fromList(ensureList(params.brainreg.bending_energy_weight))
-    grid_spacing_ch = Channel.fromList(ensureList(params.brainreg.grid_spacing))
-    smoothing_sigma_ch = Channel.fromList(ensureList(params.brainreg.smoothing_sigma_floating))
-    
-    // Combine all parameter channels to create all combinations NOTE: it's a nextflow channel, not an image channel!
-    param_combinations = bending_energy_ch
-        .combine(grid_spacing_ch)
-        .combine(smoothing_sigma_ch)
-        .map { bending, grid, sigma ->
-            [
-                // atlas isn't swept (still a single value from config), but it's
-                // included here so it flows into copyResultsToImageFolder's
-                // paramsString -- otherwise two runs that only differ by atlas
-                // would publish to the same folder name and silently overwrite
-                // each other's results.
-                atlas: params.brainreg.atlas,
-                bending_energy_weight: bending,
-                grid_spacing: grid,
-                smoothing_sigma_floating: sigma
-            ]
+        // Run brainreg with primary and additional channels
+        // (brainreg_install and atlas_cache were created above so organize step
+        // could share the same env)
+        // Pass only the params brainreg actually uses: passing the whole params map
+        // would make the task hash depend on every parameter, so any unrelated
+        // change (new brain_id, a skip flag) would re-run all registrations on -resume.
+        brr = brainregRunRegistration(brainreg_install,
+                               atlas_cache,
+                               brainreg_sweep_input,
+                               [brainreg: params.brainreg,
+                                reorientation: params.bigstitcher.reorientation])
+
+        // Process the first channel: extract the first element of each tuple
+        def processed_results = brr.named_results.map { it ->
+            def key = PathUtils.getBaseKey(it[0])
+            tuple(key, it[1], it[2])
         }
 
-    // Log the parameter combinations that will be tested
-    param_combinations.view { combo ->
-        "Parameter combination: atlas=${combo.atlas}, bending_energy_weight=${combo.bending_energy_weight}, grid_spacing=${combo.grid_spacing}, smoothing_sigma_floating=${combo.smoothing_sigma_floating}"
-    }
-    
-    // Cross brainreg input with parameter combinations
-    brainreg_sweep_input = brainreg_input.combine(param_combinations)
-
-    // Run brainreg with primary and additional channels
-    // (brainreg_install and atlas_cache were created above so organize step
-    // could share the same env)
-    // Pass only the params brainreg actually uses: passing the whole params map
-    // would make the task hash depend on every parameter, so any unrelated
-    // change (new brain_id, a skip flag) would re-run all registrations on -resume.
-    brr = brainregRunRegistration(brainreg_install,
-                           atlas_cache,
-                           brainreg_sweep_input,
-                           [brainreg: params.brainreg,
-                            reorientation: params.bigstitcher.reorientation])
-
-    // Process the first channel: extract the first element of each tuple
-    def processed_results = brr.named_results.map { it ->
-        def key = PathUtils.getBaseKey(it[0])
-        tuple(key, it[1], it[2])
-    }
-
-    // Construct output paths for each brain using publishable_images (which carries output_path)
-    def processed_images = publishable_images.map { key, original_path, output_path ->
-        tuple(key, original_path, output_path)
-    }
-
-    // Combine the channels by the key to get all combinations
-    result_and_paths = processed_results
-        .combine(processed_images, by: 0)
-        .map { key, combo, result_files, original_path, output_path ->
-            tuple(key, output_path, combo, result_files, original_path)
+        // Construct output paths for each brain using publishable_images (which carries output_path)
+        def processed_images = publishable_images.map { key, original_path, output_path ->
+            tuple(key, original_path, output_path)
         }
 
-    if (!params.skip_registration_transfer) {
-        copyResultsToImageFolder(result_and_paths)
+        // Combine the channels by the key to get all combinations
+        result_and_paths = processed_results
+            .combine(processed_images, by: 0)
+            .map { key, combo, result_files, original_path, output_path ->
+                tuple(key, output_path, combo, result_files, original_path)
+            }
+
+        if (!params.skip_registration_transfer) {
+            copyResultsToImageFolder(result_and_paths)
+        }
     }
 
     // ---------------------------------------------------------------------
@@ -567,96 +587,94 @@ workflow {
     // space through the chosen registration (whatever its verdict; the
     // verdict is written next to the points in registration_choice.json).
     // ---------------------------------------------------------------------
-    if (params.skip_registration_selection) {
-        return
-    }
+    if (do_selection) {
+        // A brain moves on as soon as all of its own variants are done; with
+        // errorStrategy 'ignore' a failed variant only shrinks the group.
+        def n_combos = ensureList(params.brainreg.bending_energy_weight).size() *
+                       ensureList(params.brainreg.grid_spacing).size() *
+                       ensureList(params.brainreg.smoothing_sigma_floating).size()
+        variants_by_brain = brr.variant_dir
+            .map { image_name, combo, dir ->
+                def key = PathUtils.getBaseKey(image_name)
+                tuple(key, variantName(key, combo), dir)
+            }
+            .groupTuple(size: n_combos, remainder: true)
 
-    // A brain moves on as soon as all of its own variants are done; with
-    // errorStrategy 'ignore' a failed variant only shrinks the group.
-    def n_combos = ensureList(params.brainreg.bending_energy_weight).size() *
-                   ensureList(params.brainreg.grid_spacing).size() *
-                   ensureList(params.brainreg.smoothing_sigma_floating).size()
-    variants_by_brain = brr.variant_dir
-        .map { image_name, combo, dir ->
-            def key = PathUtils.getBaseKey(image_name)
-            tuple(key, variantName(key, combo), dir)
-        }
-        .groupTuple(size: n_combos, remainder: true)
+        regqc_env = regQcEnvInstall()
+        selectBestRegistration(regqc_env, atlas_cache, variants_by_brain)
 
-    regqc_env = regQcEnvInstall()
-    selectBestRegistration(regqc_env, atlas_cache, variants_by_brain)
-
-    if (params.user_name && !params.skip_registration_transfer) {
-        publishRegistrationQcToSource(
-            selectBestRegistration.out.qc
-                .join(publishable_images)
-                .map { key, qc_dir, original_path, output_path ->
-                    tuple(key, qc_dir, output_path, "registration")
-                })
-    }
-
-    if (params.skip_points_to_atlas || !params.user_name) {
-        return
-    }
-
-    // (key, selected variant name, its brainreg_output dir, evaluation.json)
-    selected_registration = selectBestRegistration.out.selected
-        .join(variants_by_brain)
-        .map { key, selected, evaluation, names, dirs ->
-            def name = selected.trim()
-            def dir_list = dirs instanceof List ? dirs : [dirs]
-            // variantName() returns a GString, which never equals a String, so
-            // compare as Strings; a -1 index would silently pick the last dir.
-            def idx = names.collect { it.toString() }.indexOf(name)
-            if (idx < 0) error "Selected variant ${name} not among ${key}'s variants"
-            tuple(key, name, dir_list[idx], evaluation)
-        }
-
-    // Detections: from this run's spotiflow, or (with --skip_spotiflow) an
-    // existing ch1.csv on /work, as the spotiflow branch does for the zarr.
-    def detections
-    if (!params.skip_spotiflow) {
-        detections = spotiflowDetectKuma.out.detections
-    } else {
-        detections = images_with_keys.map { key, original_path, output_path ->
-            tuple(key, "${params.ome_zarr_output_base}/${params.user_name}/detection_results/${params.spotiflow_version}/${key}")
+        if (params.user_name && !params.skip_registration_transfer) {
+            publishRegistrationQcToSource(
+                selectBestRegistration.out.qc
+                    .join(publishable_images)
+                    .map { key, qc_dir, original_path, output_path ->
+                        tuple(key, qc_dir, output_path, "registration")
+                    })
         }
     }
-    detections = detections.filter { key, det_dir ->
-        def ok = file("${det_dir}/ch1.csv").exists()
-        if (!ok) log.warn "No detections at ${det_dir}/ch1.csv - skipping points-to-atlas for ${key}"
-        ok
-    }
 
-    points_input = selected_registration
-        .join(detections)
-        .map { key, name, dir, evaluation, det_dir ->
-            def zarr = "${params.ome_zarr_output_base}/${params.user_name}/${key}/ch1.ome.zarr"
-            def zarr_meta = file("${zarr}/0/.zarray").exists() ? file("${zarr}/0/.zarray") : file("${zarr}/0/zarr.json")
-            tuple(key, name, dir, evaluation, file("${det_dir}/ch1.csv"), zarr_meta, det_dir)
+    if (do_points) {
+        // (key, selected variant name, its brainreg_output dir, evaluation.json)
+        selected_registration = selectBestRegistration.out.selected
+            .join(variants_by_brain)
+            .map { key, selected, evaluation, names, dirs ->
+                def name = selected.trim()
+                def dir_list = dirs instanceof List ? dirs : [dirs]
+                // variantName() returns a GString, which never equals a String, so
+                // compare as Strings; a -1 index would silently pick the last dir.
+                def idx = names.collect { it.toString() }.indexOf(name)
+                if (idx < 0) error "Selected variant ${name} not among ${key}'s variants"
+                tuple(key, name, dir_list[idx], evaluation)
+            }
+
+        // Detections: from this run's spotiflow, or (with --skip_spotiflow) an
+        // existing ch1.csv on /work, as the spotiflow branch does for the zarr.
+        def detections
+        if (!params.skip_spotiflow) {
+            detections = spotiflowDetectKuma.out.detections
+        } else {
+            detections = images_with_keys.map { key, original_path, output_path ->
+                tuple(key, "${params.ome_zarr_output_base}/${params.user_name}/detection_results/${params.spotiflow_version}/${key}")
+            }
         }
-    transformPointsToAtlas(brainreg_install, atlas_cache, points_input)
+        detections = detections.filter { key, det_dir ->
+            def ok = file("${det_dir}/ch1.csv").exists()
+            if (!ok) log.warn "No detections at ${det_dir}/ch1.csv - skipping points-to-atlas for ${key}"
+            ok
+        }
 
-    if (!params.skip_results_transfer) {
-        publishDetectionsToSource(
-            transformPointsToAtlas.out.points
-                .join(detections)
-                .join(publishable_images)
-                .map { key, point_files, det_dir, original_path, output_path ->
-                    def files = point_files instanceof List ? point_files : [point_files]
-                    tuple(key, files + [file("${det_dir}/ch1.csv")], output_path,
-                          "detection/${params.spotiflow_version}")
-                })
+        points_input = selected_registration
+            .join(detections)
+            .map { key, name, dir, evaluation, det_dir ->
+                def zarr = "${params.ome_zarr_output_base}/${params.user_name}/${key}/ch1.ome.zarr"
+                def zarr_meta = file("${zarr}/0/.zarray").exists() ? file("${zarr}/0/.zarray") : file("${zarr}/0/zarr.json")
+                tuple(key, name, dir, evaluation, file("${det_dir}/ch1.csv"), zarr_meta, det_dir)
+            }
+        transformPointsToAtlas(brainreg_install, atlas_cache, points_input)
+
+        if (!params.skip_results_transfer) {
+            publishDetectionsToSource(
+                transformPointsToAtlas.out.points
+                    .join(detections)
+                    .join(publishable_images)
+                    .map { key, point_files, det_dir, original_path, output_path ->
+                        def files = point_files instanceof List ? point_files : [point_files]
+                        tuple(key, files + [file("${det_dir}/ch1.csv")], output_path,
+                              "detection/${params.spotiflow_version}")
+                    })
+        }
     }
 
+    onComplete:
+    sendRunSummary()
 }
 
-// OME-Zarr-only entry point: skip stitching/fusion/brainreg entirely and convert
+// OME-Zarr-only mode (run with --ome_zarr_only): skip stitching/fusion/brainreg entirely and convert
 // already-fused ch1 TIFFs (published under <output_base_path>/<user_name>[/<analysis_subfolder>]/<key>/ch1/)
 // straight to OME-Zarr on local cluster storage.
 //
 // Usage:
-//   nextflow run main.nf -entry omeZarrOnly -profile slurm \
+//   nextflow run main.nf --ome_zarr_only -profile slurm \
 //       --brain_id MS190,MS191,MS192 --user_name First_Last
 workflow omeZarrOnly {
     if (!params.brain_id) {
@@ -696,7 +714,14 @@ workflow omeZarrOnly {
 // WHERE (the work directory) and WHY (the tail of that task's .command.err).
 // It always writes a report file; emailing it is best-effort.
 // ---------------------------------------------------------------------------
-workflow.onComplete {
+// Value of column `k` in a split trace row (empty if the column is missing).
+def traceField(idx, row, k) {
+    return idx.containsKey(k) && idx[k] < row.size() ? row[idx[k]] : ''
+}
+
+// Called from the `onComplete:` section of the workflows (Nextflow >= 26
+// strict syntax no longer allows a top-level `workflow.onComplete { }`).
+def sendRunSummary() {
     def lines = []
     lines << "Nextflow run summary"
     lines << "===================="
@@ -718,10 +743,9 @@ workflow.onComplete {
             rows[0].split('\t').eachWithIndex { h, i -> idx[h] = i }
             rows.drop(1).each { row ->
                 def c = row.split('\t')
-                def get = { k -> idx.containsKey(k) && idx[k] < c.size() ? c[idx[k]] : '' }
-                if (get('status') in ['FAILED', 'ABORTED']) {
-                    failed << [name: get('name'), status: get('status'),
-                               exit: get('exit'), workdir: get('workdir')]
+                if (traceField(idx, c, 'status') in ['FAILED', 'ABORTED']) {
+                    failed << [name: traceField(idx, c, 'name'), status: traceField(idx, c, 'status'),
+                               exit: traceField(idx, c, 'exit'), workdir: traceField(idx, c, 'workdir')]
                 }
             }
         }
@@ -765,7 +789,10 @@ workflow.onComplete {
     // through Slurm's own job mail instead: a one-minute job whose name is the
     // subject. Slurm mails only the name and state, so the subject stays short
     // and the details are in the report file (pipeline_failures_<run>.txt).
-    if (params.notify_email && params.notify_email != true) {
+    // Nextflow >= 26 keeps `--notify_email false` as the string 'false'
+    // (the default is a string), so reject boolean-like strings explicitly.
+    def notify = params.notify_email?.toString()?.trim()
+    if (notify && !(notify.toLowerCase() in ['true', 'false', 'null'])) {
         def tag = failed ? "FAILURES (${failed.size()})" : 'OK'
         def subject = "[nextflow] ${tag}: ${params.brain_id ?: 'run'}"
             .replaceAll(/[^\w\s\[\]():,.+-]/, '_')
@@ -775,7 +802,8 @@ workflow.onComplete {
                    '--output=/dev/null', '--error=/dev/null', '--wrap=true']
         try {
             def proc = cmd.collect { it.toString() }.execute()
-            def out = new StringBuilder(), err = new StringBuilder()
+            def out = new StringBuilder()
+            def err = new StringBuilder()
             proc.waitForProcessOutput(out, err)
             if (proc.exitValue() == 0) {
                 log.info "Summary notice for ${params.notify_email} sent via Slurm mail job ${out.toString().trim()}"
